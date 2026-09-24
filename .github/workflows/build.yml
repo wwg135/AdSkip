@@ -5,58 +5,119 @@ on:
   push:
     branches:
       - "*"
-  pull_request:
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Build ${{ matrix.scheme }}
-    runs-on: macos-14
+    name: Build ${{ matrix.name }}
+    runs-on: macos-latest
 
     strategy:
       fail-fast: false
       matrix:
-        scheme:
-          - rootless
-          - roothide
+        include:
+          - name: Rootless
+            type: rootless
+            theos: https://github.com/theos/theos.git
+            scheme: rootless
+            target: iphone:clang:16.5:15.0
+            artifact: AdSkip-rootless
+
+          - name: RootHide
+            type: roothide
+            theos: https://github.com/roothide/theos.git
+            scheme: roothide
+            target: iphone:clang:16.5:15.0
+            artifact: AdSkip-roothide
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Install Theos and iOS SDK
-        uses: Randomblock1/theos-action@v1
         with:
-          theos-dir: ${{ github.workspace }}/theos
-          theos-src: https://github.com/theos/theos
-          theos-sdks: https://github.com/theos/sdks
-          theos-sdks-branch: master
+          submodules: true
+
+      - name: Install Theos
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$HOME/theos"
+
+          git clone \
+            --depth 1 \
+            --recursive \
+            "${{ matrix.theos }}" \
+            "$HOME/theos"
+
+          echo "THEOS=$HOME/theos" >> "$GITHUB_ENV"
+
+      - name: Install ldid
+        shell: bash
+        run: |
+          set -e
+
+          if ! command -v ldid >/dev/null 2>&1; then
+            brew install ldid
+          fi
+
+      - name: Install SDK
+        shell: bash
+        run: |
+          set -e
+
+          rm -rf "$HOME/theos-sdks"
+
+          git clone \
+            --depth 1 \
+            https://github.com/theos/sdks.git \
+            "$HOME/theos-sdks"
+
+          SDK="$HOME/theos-sdks/iPhoneOS16.5.sdk"
+
+          if [ ! -d "$SDK" ]; then
+            echo "iPhoneOS16.5.sdk not found"
+            find "$HOME/theos-sdks" -maxdepth 1 -name "*.sdk" -print
+            exit 1
+          fi
+
+          rm -rf "$THEOS/sdks"
+          mkdir -p "$THEOS/sdks"
+          cp -R "$SDK" "$THEOS/sdks/"
 
       - name: Build package
-        env:
-          THEOS_PACKAGE_SCHEME: ${{ matrix.scheme }}
+        shell: bash
         run: |
-          make clean package FINALPACKAGE=1
+          set -e
+
+          make clean
+
+          make package \
+            TARGET="${{ matrix.target }}" \
+            THEOS_PACKAGE_SCHEME="${{ matrix.scheme }}" \
+            FINALPACKAGE=1
 
       - name: Rename package
+        shell: bash
         run: |
-          mkdir -p output/${{ matrix.scheme }}
+          set -e
 
-          for deb in packages/*.deb; do
-            [ -f "$deb" ] || continue
+          mkdir -p output
 
-            filename="$(basename "$deb" .deb)"
-            cp "$deb" "output/${{ matrix.scheme }}/${filename}-${{ matrix.scheme }}.deb"
+          for package in packages/*.deb; do
+            [ -f "$package" ] || continue
+
+            name="$(basename "$package" .deb)"
+            cp "$package" "output/${name}-${{ matrix.type }}.deb"
           done
 
-          test -n "$(find output/${{ matrix.scheme }} -name '*.deb' -print -quit)"
+          test -n "$(find output -name '*.deb' -print -quit)"
 
-      - name: Upload ${{ matrix.scheme }} package
+      - name: Upload package
         uses: actions/upload-artifact@v4
         with:
-          name: AdSkip-${{ matrix.scheme }}
-          path: output/${{ matrix.scheme }}/*.deb
+          name: ${{ matrix.artifact }}
+          path: output/*.deb
           if-no-files-found: error
           retention-days: 14
