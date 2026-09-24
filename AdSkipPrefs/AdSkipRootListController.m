@@ -37,6 +37,13 @@ static NSString * const kAppsKey = @"Apps";
     self.navigationItem.title = @"广告跳过";
 }
 
+- (void)viewWillAppear:(BOOL)animated
+{
+    [super viewWillAppear:animated];
+    self.allApps = [AppScanner scanApplications];
+    [self reloadSpecifiers];
+}
+
 - (NSArray *)specifiers
 {
     if (!_specifiers) {
@@ -151,6 +158,7 @@ static NSString * const kAppsKey = @"Apps";
         [appSpecifier setProperty:app.bundleID forKey:@"bundleID"];
         [appSpecifier setProperty:app.type forKey:@"appType"];
         [appSpecifier setProperty:app.displayName forKey:@"appName"];
+        [appSpecifier setProperty:app.iconPath ?: @"" forKey:@"iconPath"];
 
         NSNumber *state = appsState[app.bundleID];
         if (!state) {
@@ -223,6 +231,7 @@ static NSString * const kAppsKey = @"Apps";
           specifier:(PSSpecifier *)specifier
 {
     self.selectedCategory = [value integerValue];
+    _specifiers = nil;
     [self reloadSpecifiers];
 }
 
@@ -271,5 +280,6 @@ static NSString * const kAppsKey = @"Apps";
     [self saveConfiguration:config];
     [self reloadSpecifiers];
 }
+
 
 @end

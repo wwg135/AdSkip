@@ -36,6 +36,12 @@
     app.displayName = displayName;
     app.type = type;
 
+    NSArray *iconFiles = info[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"];
+    if ([iconFiles isKindOfClass:[NSArray class]] && iconFiles.count > 0) {
+        NSString *icon = iconFiles.lastObject;
+        app.iconPath = [appPath stringByAppendingPathComponent:[icon stringByAppendingString:@".png"]];
+    }
+
     result[bundleID] = app;
 }
 
