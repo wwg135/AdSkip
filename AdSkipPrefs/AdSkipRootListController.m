@@ -134,8 +134,8 @@ static NSString * const kAppsKey = @"Apps";
                                           cell:PSSegmentCell
                                           edit:nil];
 
-    [categorySpecifier setProperty:@[@"全部", @"商店", @"系统"] forKey:@"titles"];
-    [categorySpecifier setProperty:@[@"0", @"1", @"2"] forKey:@"values"];
+    [categorySpecifier setProperty:@[@"全部", @"商店", @"系统"] forKey:@"validTitles"];
+    [categorySpecifier setProperty:@[@0, @1, @2] forKey:@"validValues"];
     [specifiers addObject:categorySpecifier];
 
     NSString *categoryName = self.selectedCategory == 1 ? @"商店应用" : (self.selectedCategory == 2 ? @"系统应用" : @"全部应用");
