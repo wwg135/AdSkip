@@ -42,6 +42,17 @@
         app.iconPath = [appPath stringByAppendingPathComponent:[icon stringByAppendingString:@".png"]];
     }
 
+    if (app.iconPath.length == 0) {
+        NSArray *fallbacks = @[@"AppIcon60x60@2x.png", @"AppIcon29x29@2x.png"];
+        for (NSString *file in fallbacks) {
+            NSString *candidate = [appPath stringByAppendingPathComponent:file];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+                app.iconPath = candidate;
+                break;
+            }
+        }
+    }
+
     result[bundleID] = app;
 }
 
