@@ -1,5 +1,9 @@
 #import "CategorySegmentCell.h"
 
+@interface NSObject (AdSkipCategory)
+- (void)setCategory:(NSNumber *)category specifier:(PSSpecifier *)specifier;
+@end
+
 @interface CategorySegmentCell ()
 @property(nonatomic,strong) UISegmentedControl *segment;
 @end

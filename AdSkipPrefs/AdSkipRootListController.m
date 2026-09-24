@@ -275,6 +275,17 @@ static NSString * const kAppsKey = @"Apps";
     [self reloadSpecifiers];
 }
 
+- (void)setCategory:(NSNumber *)category
+          specifier:(PSSpecifier *)specifier
+{
+    [[NSUserDefaults standardUserDefaults] setInteger:category.integerValue forKey:@"AppCategory"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    _specifiers = nil;
+    [self reloadSpecifiers];
+}
+
+
 #pragma mark - Reset
 
 - (void)resetSettings
