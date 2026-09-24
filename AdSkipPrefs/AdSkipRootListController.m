@@ -23,7 +23,7 @@ static NSString * const kAppsKey = @"Apps";
     self = [super init];
 
     if (self) {
-        _selectedCategory = 0;
+        _selectedCategory = [[[NSUserDefaults standardUserDefaults] objectForKey:@"AppCategory"] integerValue];
         _allApps = @[];
     }
 
@@ -134,7 +134,7 @@ static NSString * const kAppsKey = @"Apps";
                                           cell:PSLinkCell
                                           edit:nil];
 
-    [categorySpecifier setProperty:@"CategorySegmentCell" forKey:@"cellClass"];
+    
     
     [specifiers addObject:categorySpecifier];
 
