@@ -19,3 +19,7 @@ AdSkipPrefs_RESOURCE_FILES = AdSkipPrefs/Root.plist AdSkipPrefs/Resources/header
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/bundle.mk
+
+after-stage::
+	@mkdir -p "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences"
+	@cp "AdSkipPrefs/layout/Library/PreferenceLoader/Preferences/AdSkipPrefs.plist" "$(THEOS_STAGING_DIR)/Library/PreferenceLoader/Preferences/AdSkipPrefs.plist"
