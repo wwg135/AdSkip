@@ -58,8 +58,7 @@ static NSDictionary *loadAdSkipPreferences(void)
 
 static void loadUserConfig(void)
 {
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
+    {
         NSDictionary *config = loadAdSkipPreferences();
 
         NSNumber *enabled = config[@"Enabled"];
@@ -84,7 +83,7 @@ static void loadUserConfig(void)
             [legacyDisabled boolValue]) {
             gUserDisabled = YES;
         }
-    });
+    }
 }
 
 static BOOL adSkipEnabledForCurrentApp(void)
