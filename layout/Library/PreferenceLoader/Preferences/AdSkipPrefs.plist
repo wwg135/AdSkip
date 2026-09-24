@@ -1,4 +1,23 @@
-{
-    bundle = "AdSkipPrefs.bundle";
-    entry = "AdSkipRootListController";
-}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>entry</key>
+    <dict>
+        <key>bundle</key>
+        <string>AdSkipPrefs</string>
+        <key>cell</key>
+        <string>PSLinkCell</string>
+        <key>detail</key>
+        <string>AdSkipRootListController</string>
+        <key>icon</key>
+        <string>icon.png</string>
+        <key>id</key>
+        <string>AdSkip</string>
+        <key>isController</key>
+        <true/>
+        <key>label</key>
+        <string>广告跳过</string>
+    </dict>
+</dict>
+</plist>
