@@ -216,6 +216,7 @@ static NSString * const kAppsKey = @"Apps";
     NSMutableDictionary *config = [self configuration];
     config[kEnabledKey] = @([value boolValue]);
     [self saveConfiguration:config];
+    [self reloadSpecifiers];
 }
 
 #pragma mark - Category
@@ -264,6 +265,7 @@ static NSString * const kAppsKey = @"Apps";
     config[kAppsKey] = apps;
 
     [self saveConfiguration:config];
+    [self reloadSpecifiers];
 }
 
 #pragma mark - Respring
