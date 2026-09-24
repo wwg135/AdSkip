@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>zh_CN</string>
+    <string>English</string>
     <key>CFBundleDisplayName</key>
     <string>广告跳过</string>
     <key>CFBundleIdentifier</key>
