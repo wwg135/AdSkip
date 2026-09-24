@@ -13,6 +13,7 @@ static NSString * const kAppsKey = @"Apps";
 
 @property(nonatomic, strong) NSArray<ADSkipApp *> *allApps;
 @property(nonatomic, assign) NSInteger selectedCategory;
+@property(nonatomic, strong) UISegmentedControl *categoryControl;
 
 @end
 
@@ -35,6 +36,16 @@ static NSString * const kAppsKey = @"Apps";
     [super viewDidLoad];
 
     self.navigationItem.title = @"广告跳过";
+
+    self.categoryControl = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"商店", @"系统"]];
+    self.categoryControl.selectedSegmentIndex = self.selectedCategory;
+    [self.categoryControl addTarget:self action:@selector(categoryChanged:) forControlEvents:UIControlEventValueChanged];
+
+    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 54)];
+    self.categoryControl.frame = CGRectMake(20, 10, header.bounds.size.width - 40, 34);
+    self.categoryControl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    [header addSubview:self.categoryControl];
+    self.table.tableHeaderView = header;
 }
 
 - (void)viewWillAppear:(BOOL)animated
@@ -125,20 +136,6 @@ static NSString * const kAppsKey = @"Apps";
 
     [specifiers addObject:globalSwitch];
 
-    PSSpecifier *categorySpecifier =
-        [PSSpecifier preferenceSpecifierNamed:@"应用分类"
-                                        target:self
-                                           set:@selector(setCategory:specifier:)
-                                           get:@selector(category:)
-                                        detail:nil
-                                          cell:PSGroupCell
-                                          edit:nil];
-
-    [categorySpecifier setProperty:@"CategorySegmentCell" forKey:@"cellClass"];
-    [categorySpecifier setProperty:@"AppCategory" forKey:@"key"];
-
-    [specifiers addObject:categorySpecifier];
-
     NSString *categoryName = self.selectedCategory == 1 ? @"商店应用" : (self.selectedCategory == 2 ? @"系统应用" : @"全部应用");
 
     PSSpecifier *appsGroup =
@@ -227,6 +224,16 @@ static NSString * const kAppsKey = @"Apps";
 }
 
 #pragma mark - Category
+
+
+- (void)categoryChanged:(UISegmentedControl *)sender
+{
+    self.selectedCategory = sender.selectedSegmentIndex;
+    [[NSUserDefaults standardUserDefaults] setInteger:self.selectedCategory forKey:@"AppCategory"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    _specifiers = nil;
+    [self reloadSpecifiers];
+}
 
 - (id)category:(PSSpecifier *)specifier
 {
