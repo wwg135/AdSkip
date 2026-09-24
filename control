@@ -2,7 +2,7 @@ Package: com.mg.adskip
 Name: 广告跳过
 Version: 3.4.0
 Architecture: iphoneos-arm64
-Description: 可按应用控制的 RootHide/rootless 广告跳过插件，包含系统设置入口、应用扫描、总开关和注销生效。
+Description: 可按应用控制的 rootless/rootHide 广告跳过插件，包含系统设置入口、应用扫描、总开关和注销生效。
 Maintainer: M哥
 Author: M哥
 Section: Tweaks
