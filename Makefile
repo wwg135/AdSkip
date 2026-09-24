@@ -11,7 +11,7 @@ AdSkip_CFLAGS += -Wno-module-import-in-extern-c -Wno-deprecated-declarations
 AdSkip_LDFLAGS = -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Vision -framework IOKit
 
 BUNDLE_NAME = AdSkipPrefs
-AdSkipPrefs_FILES = AdSkipPrefs/AdSkipRootListController.m AdSkipPrefs/AppScanner.m AdSkipPrefs/CategorySegmentCell.m
+AdSkipPrefs_FILES = AdSkipPrefs/AdSkipRootListController.m AdSkipPrefs/AppScanner.m
 AdSkipPrefs_INSTALL_PATH = /Library/PreferenceBundles
 AdSkipPrefs_FRAMEWORKS = UIKit
 AdSkipPrefs_PRIVATE_FRAMEWORKS = Preferences
