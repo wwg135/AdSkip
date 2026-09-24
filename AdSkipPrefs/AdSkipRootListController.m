@@ -25,7 +25,7 @@ static NSString * const kAppsKey = @"Apps";
 
     if (self) {
         _selectedCategory = 0;
-        _allApps = [AppScanner scanApplications];
+        _allApps = @[];
     }
 
     return self;
@@ -91,6 +91,10 @@ static NSString * const kAppsKey = @"Apps";
 
 - (NSMutableArray *)buildSpecifiers
 {
+    if (self.allApps.count == 0) {
+        self.allApps = [AppScanner scanApplications];
+    }
+
     NSMutableArray *specifiers = [NSMutableArray array];
 
     PSSpecifier *header =
