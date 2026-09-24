@@ -5,61 +5,95 @@
 
 @implementation AppScanner
 
-+ (NSArray<NSString *> *)applicationRoots {
-    return @[
-        @"/var/containers/Bundle/Application",
-        @"/Applications",
-        @"/System/Library/CoreServices"
-    ];
-}
++ (void)scanDirectory:(NSString *)directory
+                 type:(NSString *)type
+               result:(NSMutableDictionary<NSString *, ADSkipApp *> *)result
+{
+    NSFileManager *fileManager = [NSFileManager defaultManager];
 
-+ (NSString *)displayNameForInfo:(NSDictionary *)info fallback:(NSString *)fallback {
-    NSString *name = info[@"CFBundleDisplayName"];
-    if (![name isKindOfClass:NSString.class] || name.length == 0) {
-        name = info[@"CFBundleName"];
-    }
-    return ([name isKindOfClass:NSString.class] && name.length) ? name : fallback;
-}
+    NSArray<NSString *> *items =
+        [fileManager contentsOfDirectoryAtPath:directory error:nil];
 
-+ (void)scanDirectory:(NSString *)directory type:(NSString *)type output:(NSMutableDictionary<NSString *, ADSkipApp *> *)output {
-    NSFileManager *fm = NSFileManager.defaultManager;
-    NSArray<NSString *> *children = [fm contentsOfDirectoryAtPath:directory error:nil];
-    for (NSString *child in children) {
-        NSString *path = [directory stringByAppendingPathComponent:child];
+    for (NSString *item in items) {
+        NSString *path = [directory stringByAppendingPathComponent:item];
+
         BOOL isDirectory = NO;
-        if (![fm fileExistsAtPath:path isDirectory:&isDirectory] || !isDirectory) continue;
-
-        if ([child.pathExtension.lowercaseString isEqualToString:@"app"]) {
-            NSString *plistPath = [path stringByAppendingPathComponent:@"Info.plist"];
-            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:plistPath];
-            NSString *bid = info[@"CFBundleIdentifier"];
-            if (![bid isKindOfClass:NSString.class] || bid.length == 0) continue;
-            if (output[bid] != nil) continue;
-
-            ADSkipApp *app = [ADSkipApp new];
-            app.bundleID = bid;
-            app.path = path;
-            app.type = type;
-            app.displayName = [self displayNameForInfo:info fallback:child.stringByDeletingPathExtension];
-            output[bid] = app;
+        if (![fileManager fileExistsAtPath:path isDirectory:&isDirectory]) {
             continue;
         }
 
-        // Store apps are nested one level below a UUID directory.
-        [self scanDirectory:path type:type output:output];
+        if (!isDirectory) {
+            continue;
+        }
+
+        if ([item.pathExtension.lowercaseString isEqualToString:@"app"]) {
+            NSString *infoPath =
+                [path stringByAppendingPathComponent:@"Info.plist"];
+
+            NSDictionary *info =
+                [NSDictionary dictionaryWithContentsOfFile:infoPath];
+
+            if (![info isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+
+            NSString *bundleID = info[@"CFBundleIdentifier"];
+            if (![bundleID isKindOfClass:[NSString class]] ||
+                bundleID.length == 0) {
+                continue;
+            }
+
+            if (result[bundleID] != nil) {
+                continue;
+            }
+
+            NSString *displayName = info[@"CFBundleDisplayName"];
+
+            if (![displayName isKindOfClass:[NSString class]] ||
+                displayName.length == 0) {
+                displayName = info[@"CFBundleName"];
+            }
+
+            if (![displayName isKindOfClass:[NSString class]] ||
+                displayName.length == 0) {
+                displayName = item.stringByDeletingPathExtension;
+            }
+
+            ADSkipApp *app = [ADSkipApp new];
+            app.bundleID = bundleID;
+            app.displayName = displayName;
+            app.type = type;
+
+            result[bundleID] = app;
+            continue;
+        }
+
+        // 递归扫描 UUID 目录和系统子目录
+        [self scanDirectory:path type:type result:result];
     }
 }
 
-+ (NSArray<ADSkipApp *> *)scanApplications {
-    NSMutableDictionary<NSString *, ADSkipApp *> *found = [NSMutableDictionary dictionary];
-    [self scanDirectory:@"/var/containers/Bundle/Application" type:@"store" output:found];
-    [self scanDirectory:@"/Applications" type:@"system" output:found];
-    [self scanDirectory:@"/System/Library/CoreServices" type:@"system" output:found];
++ (NSArray<ADSkipApp *> *)scanApplications
+{
+    NSMutableDictionary<NSString *, ADSkipApp *> *result =
+        [NSMutableDictionary dictionary];
 
-    NSArray *apps = [found.allValues sortedArrayUsingComparator:^NSComparisonResult(ADSkipApp *a, ADSkipApp *b) {
-        NSComparisonResult result = [a.displayName localizedCaseInsensitiveCompare:b.displayName];
-        return result == NSOrderedSame ? [a.bundleID compare:b.bundleID] : result;
+    [self scanDirectory:@"/var/containers/Bundle/Application"
+                   type:@"store"
+                 result:result];
+
+    [self scanDirectory:@"/Applications"
+                   type:@"system"
+                 result:result];
+
+    [self scanDirectory:@"/System/Library/CoreServices"
+                   type:@"system"
+                 result:result];
+
+    NSArray *apps = [result.allValues sortedArrayUsingComparator:^NSComparisonResult(ADSkipApp *a, ADSkipApp *b) {
+        return [a.displayName localizedCaseInsensitiveCompare:b.displayName];
     }];
+
     return apps;
 }
 
