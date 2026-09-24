@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+"http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>广告跳过</string>
+    <key>CFBundleExecutable</key>
+    <string>AdSkipPrefs</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.mg.adskip.preferences</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>AdSkipPrefs</string>
+    <key>CFBundlePackageType</key>
+    <string>BNDL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>3.4.0</string>
+    <key>CFBundleVersion</key>
+    <string>3.4.0</string>
+    <key>NSPrincipalClass</key>
+    <string>AdSkipRootListController</string>
+    <key>PreferenceSpecifiers</key>
+    <array/>
+</dict>
+</plist>
