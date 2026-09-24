@@ -77,7 +77,6 @@ static NSString * const kAppsKey = @"Apps";
         CFSTR("com.mg.adskip")
     );
 
-    // 兼容旧字段
     CFPreferencesSetAppValue(
         CFSTR("enabledApps"),
         (__bridge CFPropertyListRef)configuration[kAppsKey],
@@ -122,11 +121,8 @@ static NSString * const kAppsKey = @"Apps";
                                           cell:PSSegmentCell
                                           edit:nil];
 
-    [categorySpecifier setProperty:@[@"全部", @"商店", @"系统"]
-                            forKey:@"titles"];
-    [categorySpecifier setProperty:@[@"0", @"1", @"2"]
-                            forKey:@"values"];
-
+    [categorySpecifier setProperty:@[@"全部", @"商店", @"系统"] forKey:@"titles"];
+    [categorySpecifier setProperty:@[@"0", @"1", @"2"] forKey:@"values"];
     [specifiers addObject:categorySpecifier];
 
     PSSpecifier *appsGroup =
@@ -285,14 +281,7 @@ static NSString * const kAppsKey = @"Apps";
             NULL
         };
 
-        posix_spawn(
-            &pid,
-            "/usr/bin/killall",
-            NULL,
-            NULL,
-            args,
-            NULL
-        );
+        posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, args, NULL);
     }]];
 
     [self presentViewController:alert animated:YES completion:nil];
