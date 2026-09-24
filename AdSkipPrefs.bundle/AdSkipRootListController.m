@@ -34,7 +34,7 @@ static NSString * const kAppsKey = @"Apps";
 - (NSArray *)specifiers
 {
     if (!_specifiers) {
-        _specifiers = [self buildSpecifiers];
+        _specifiers = [[self buildSpecifiers] mutableCopy];
     }
 
     return _specifiers;
@@ -89,7 +89,7 @@ static NSString * const kAppsKey = @"Apps";
 
 #pragma mark - Specifiers
 
-- (NSArray *)buildSpecifiers
+- (NSMutableArray *)buildSpecifiers
 {
     NSMutableArray *specifiers = [NSMutableArray array];
 
