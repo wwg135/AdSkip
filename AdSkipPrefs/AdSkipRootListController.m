@@ -1,6 +1,5 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/Preferences.h>
-#import <spawn.h>
 
 #import "AppScanner.h"
 
@@ -36,10 +35,6 @@ static NSString * const kAppsKey = @"Apps";
     [super viewDidLoad];
 
     self.navigationItem.title = @"广告跳过";
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"注销"
-                                                                              style:UIBarButtonItemStylePlain
-                                                                             target:self
-                                                                             action:@selector(respring)];
 }
 
 - (NSArray *)specifiers
@@ -166,22 +161,20 @@ static NSString * const kAppsKey = @"Apps";
         [specifiers addObject:appSpecifier];
     }
 
-    PSSpecifier *respringGroup =
-        [PSSpecifier groupSpecifierWithName:@"设置后点击右上角“注销”生效"];
+    PSSpecifier *resetGroup =
+        [PSSpecifier groupSpecifierWithName:@"其他设置"];
+    [specifiers addObject:resetGroup];
 
-    [specifiers addObject:respringGroup];
-
-    PSSpecifier *respring =
-        [PSSpecifier preferenceSpecifierNamed:@"注销并应用设置"
+    PSSpecifier *reset =
+        [PSSpecifier preferenceSpecifierNamed:@"重置设置"
                                         target:self
                                            set:nil
                                            get:nil
                                         detail:nil
                                           cell:PSButtonCell
                                           edit:nil];
-
-    respring.buttonAction = @selector(respring);
-    [specifiers addObject:respring];
+    reset.buttonAction = @selector(resetSettings);
+    [specifiers addObject:reset];
 
     return specifiers;
 }
@@ -268,36 +261,14 @@ static NSString * const kAppsKey = @"Apps";
     [self reloadSpecifiers];
 }
 
-#pragma mark - Respring
+#pragma mark - Reset
 
-- (void)respring
+- (void)resetSettings
 {
-    UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:@"是否注销？"
-                                             message:@"注销 SpringBoard 后设置才会完全生效。"
-                                      preferredStyle:UIAlertControllerStyleAlert];
-
-    [alert addAction:
-        [UIAlertAction actionWithTitle:@"取消"
-                                 style:UIAlertActionStyleCancel
-                               handler:nil]];
-
-    [alert addAction:
-        [UIAlertAction actionWithTitle:@"确定"
-                                 style:UIAlertActionStyleDestructive
-                               handler:^(__unused UIAlertAction *action) {
-        pid_t pid = 0;
-
-        char *const args[] = {
-            (char *)"killall",
-            (char *)"SpringBoard",
-            NULL
-        };
-
-        posix_spawn(&pid, "/usr/bin/killall", NULL, NULL, args, NULL);
-    }]];
-
-    [self presentViewController:alert animated:YES completion:nil];
+    NSMutableDictionary *config = [NSMutableDictionary dictionary];
+    config[kEnabledKey] = @NO;
+    config[kAppsKey] = @{};
+    [self saveConfiguration:config];
+    [self reloadSpecifiers];
 }
 
-@end
