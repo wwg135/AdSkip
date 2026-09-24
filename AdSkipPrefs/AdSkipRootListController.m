@@ -77,7 +77,7 @@ static NSString * const kAppsKey = @"Apps";
         CFSTR("com.mg.adskip")
     );
 
-    // 与旧版本配置保持兼容
+    // 兼容旧字段
     CFPreferencesSetAppValue(
         CFSTR("enabledApps"),
         (__bridge CFPropertyListRef)configuration[kAppsKey],
@@ -113,46 +113,21 @@ static NSString * const kAppsKey = @"Apps";
 
     [specifiers addObject:globalSwitch];
 
-    PSSpecifier *categoryGroup =
-        [PSSpecifier groupSpecifierWithName:@"应用分类"];
-
-    [specifiers addObject:categoryGroup];
-
-    PSSpecifier *allButton =
-        [PSSpecifier preferenceSpecifierNamed:@"全部"
+    PSSpecifier *categorySpecifier =
+        [PSSpecifier preferenceSpecifierNamed:@"应用分类"
                                         target:self
-                                           set:nil
-                                           get:nil
+                                           set:@selector(setCategory:specifier:)
+                                           get:@selector(category:)
                                         detail:nil
-                                          cell:PSButtonCell
+                                          cell:PSSegmentCell
                                           edit:nil];
 
-    allButton.buttonAction = @selector(showAllApps);
-    [specifiers addObject:allButton];
+    [categorySpecifier setProperty:@[@"全部", @"商店", @"系统"]
+                            forKey:@"titles"];
+    [categorySpecifier setProperty:@[@"0", @"1", @"2"]
+                            forKey:@"values"];
 
-    PSSpecifier *storeButton =
-        [PSSpecifier preferenceSpecifierNamed:@"商店"
-                                        target:self
-                                           set:nil
-                                           get:nil
-                                        detail:nil
-                                          cell:PSButtonCell
-                                          edit:nil];
-
-    storeButton.buttonAction = @selector(showStoreApps);
-    [specifiers addObject:storeButton];
-
-    PSSpecifier *systemButton =
-        [PSSpecifier preferenceSpecifierNamed:@"系统"
-                                        target:self
-                                           set:nil
-                                           get:nil
-                                        detail:nil
-                                          cell:PSButtonCell
-                                          edit:nil];
-
-    systemButton.buttonAction = @selector(showSystemApps);
-    [specifiers addObject:systemButton];
+    [specifiers addObject:categorySpecifier];
 
     PSSpecifier *appsGroup =
         [PSSpecifier groupSpecifierWithName:@"应用列表"];
@@ -176,13 +151,11 @@ static NSString * const kAppsKey = @"Apps";
         [appSpecifier setProperty:app.displayName forKey:@"appName"];
 
         NSNumber *state = appsState[app.bundleID];
-
         if (!state) {
             state = @NO;
         }
 
         [appSpecifier setProperty:state forKey:@"defaultValue"];
-
         [specifiers addObject:appSpecifier];
     }
 
@@ -212,8 +185,7 @@ static NSString * const kAppsKey = @"Apps";
         return self.allApps;
     }
 
-    NSString *type =
-        self.selectedCategory == 1 ? @"store" : @"system";
+    NSString *type = self.selectedCategory == 1 ? @"store" : @"system";
 
     NSPredicate *predicate =
         [NSPredicate predicateWithBlock:^BOOL(ADSkipApp *app, NSDictionary *bindings) {
@@ -239,6 +211,20 @@ static NSString * const kAppsKey = @"Apps";
     [self saveConfiguration:config];
 }
 
+#pragma mark - Category
+
+- (id)category:(PSSpecifier *)specifier
+{
+    return @(self.selectedCategory);
+}
+
+- (void)setCategory:(NSNumber *)value
+          specifier:(PSSpecifier *)specifier
+{
+    self.selectedCategory = [value integerValue];
+    [self reloadSpecifiers];
+}
+
 #pragma mark - App switches
 
 - (id)appEnabled:(PSSpecifier *)specifier
@@ -261,8 +247,7 @@ static NSString * const kAppsKey = @"Apps";
     }
 
     NSMutableDictionary *config = [self configuration];
-    NSMutableDictionary *apps =
-        [config[kAppsKey] mutableCopy];
+    NSMutableDictionary *apps = [config[kAppsKey] mutableCopy];
 
     if (!apps) {
         apps = [NSMutableDictionary dictionary];
@@ -272,26 +257,6 @@ static NSString * const kAppsKey = @"Apps";
     config[kAppsKey] = apps;
 
     [self saveConfiguration:config];
-}
-
-#pragma mark - Categories
-
-- (void)showAllApps
-{
-    self.selectedCategory = 0;
-    [self reloadSpecifiers];
-}
-
-- (void)showStoreApps
-{
-    self.selectedCategory = 1;
-    [self reloadSpecifiers];
-}
-
-- (void)showSystemApps
-{
-    self.selectedCategory = 2;
-    [self reloadSpecifiers];
 }
 
 #pragma mark - Respring
