@@ -6,16 +6,5 @@
     <string>广告跳过</string>
     <key>entry</key>
     <string>AdSkipRootListController</string>
-    <key>PreferenceSpecifiers</key>
-    <array>
-        <dict>
-            <key>cellClass</key>
-            <string>CategorySegmentCell</string>
-            <key>cell</key>
-            <string>PSGroupCell</string>
-            <key>label</key>
-            <string>应用分类</string>
-        </dict>
-    </array>
 </dict>
 </plist>

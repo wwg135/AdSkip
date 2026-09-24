@@ -131,11 +131,12 @@ static NSString * const kAppsKey = @"Apps";
                                            set:@selector(setCategory:specifier:)
                                            get:@selector(category:)
                                         detail:nil
-                                          cell:PSLinkCell
+                                          cell:PSGroupCell
                                           edit:nil];
 
-    
-    
+    [categorySpecifier setProperty:@"CategorySegmentCell" forKey:@"cellClass"];
+    [categorySpecifier setProperty:@"AppCategory" forKey:@"key"];
+
     [specifiers addObject:categorySpecifier];
 
     NSString *categoryName = self.selectedCategory == 1 ? @"商店应用" : (self.selectedCategory == 2 ? @"系统应用" : @"全部应用");
