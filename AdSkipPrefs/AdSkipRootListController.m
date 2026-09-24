@@ -31,6 +31,17 @@ static NSString * const kAppsKey = @"Apps";
     return self;
 }
 
+- (void)viewDidLoad
+{
+    [super viewDidLoad];
+
+    self.navigationItem.title = @"广告跳过";
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"注销"
+                                                                              style:UIBarButtonItemStylePlain
+                                                                             target:self
+                                                                             action:@selector(respring)];
+}
+
 - (NSArray *)specifiers
 {
     if (!_specifiers) {
@@ -97,7 +108,7 @@ static NSString * const kAppsKey = @"Apps";
     NSMutableArray *specifiers = [NSMutableArray array];
 
     PSSpecifier *header =
-        [PSSpecifier groupSpecifierWithName:@"AdSkip"];
+        [PSSpecifier groupSpecifierWithName:@"🛡️ 广告跳过"];
 
     [specifiers addObject:header];
 
@@ -126,7 +137,7 @@ static NSString * const kAppsKey = @"Apps";
     [specifiers addObject:categorySpecifier];
 
     PSSpecifier *appsGroup =
-        [PSSpecifier groupSpecifierWithName:@"应用列表"];
+        [PSSpecifier groupSpecifierWithName:@"应用控制"];
 
     [specifiers addObject:appsGroup];
 
@@ -156,7 +167,7 @@ static NSString * const kAppsKey = @"Apps";
     }
 
     PSSpecifier *respringGroup =
-        [PSSpecifier groupSpecifierWithName:@"应用设置后需要注销 SpringBoard 才会完全生效"];
+        [PSSpecifier groupSpecifierWithName:@"设置后点击右上角“注销”生效"];
 
     [specifiers addObject:respringGroup];
 
