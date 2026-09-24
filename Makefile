@@ -1,5 +1,4 @@
 export TARGET ?= iphone:clang:16.5:15.0
-
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = AdSkip
@@ -14,7 +13,13 @@ AdSkipPrefs_FILES = AdSkipPrefs.bundle/AdSkipRootListController.m AppScanner.m
 AdSkipPrefs_INSTALL_PATH = /Library/PreferenceBundles
 AdSkipPrefs_FRAMEWORKS = UIKit
 AdSkipPrefs_PRIVATE_FRAMEWORKS = Preferences
-AdSkipPrefs_RESOURCE_FILES = AdSkipPrefs.bundle/Root.plist
+
+AdSkipPrefs_RESOURCE_FILES = \
+    AdSkipPrefs.bundle/Root.plist \
+    AdSkipPrefs.bundle/Info.plist \
+    AdSkipPrefs.bundle/Resources/icon.png \
+    AdSkipPrefs.bundle/Resources/icon@2x.png \
+    AdSkipPrefs.bundle/Resources/icon@3x.png
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 include $(THEOS_MAKE_PATH)/bundle.mk
