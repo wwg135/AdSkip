@@ -7,55 +7,6 @@
 #import <dispatch/dispatch.h>
 #import <CoreMotion/CoreMotion.h>
 
-// =====================================================================
-// AdSkip v3.3.0 (自 4.0.0 恢复 3.2.5 引擎: 含 v3.2.2 手势通道) —— 无黑名单 · 全被动 · 事件驱动 · 容器门控两级词表 + 防摇一摇
-//
-// 设计原则（2026-09-07 重构，替换 2.1.3 的"轮询引擎+黑名单"架构）：
-//   1. 安全性靠结构不靠名单：%ctor 零动作（无 timer/无 OCR/无 dlopen/无窗口），
-//      只挂 3 个通知观察者维护"会话"。无广告 app 的 hook 全程空转，
-//      全文件禁止 dispatch_sync（2.0.8 黑屏根因），禁止删视图/隐藏窗口/dismiss（通道Z 整体删除）。
-//   2. 秒跳靠事件不靠轮询：跳过按钮 setText/挂载瞬间立即点击（0 延迟），
-//      splash 容器挂载后多次采样兜异步加载。轮询 timer 只在首个信号出现后才创建。
-//   3. 两级词表门控（v3.1.0）：「跳过」类 = 容器确认 或 会话内+全屏+角落小控件；
-//      「关闭」类/图像✕ = 必须广告容器类名词根确认（双保险）。主界面误触根因
-//      从来不是"关闭"这个词，而是无容器门控就全局点字——现在所有动作都要求容器先确认。
-//   3b. 防摇一摇（v3.1.0）：广告容器确认期间拒绝 CMMotionManager 启动加速度/陀螺仪
-//      更新，摇一摇广告从"没辙"变"拆触发器"；无广告 app 的传感器行为分毫不变。
-//   5. per-app 启用制（v3.3.0）：设置面板（跳过广告，PreferenceLoader 入口）三标签
-//      （全部/商店应用/系统应用）+ 搜索 + 一键全开/全关 + 逐 app 开关；配置落
-//      CFPreferences com.mg.adskip 的 enabledApps 字典（bundleID→YES，默认空=不注入）。
-//      %ctor 在挂任何通知前判定本 app 是否启用——未启用 app 零动作返回（零开销）。
-//      保护名单（设置/SpringBoard）无条件拒绝，面板与 tweak 双侧校验。
-//   3h. 开云不跳根治（v3.2.4，截图 OCR 实证）：
-//      ⑩ 最小尺寸门控 20→13pt：开云「跳过 1s」文字标签实测仅 37x16pt，
-//        被 20pt 下限误杀（识别链词表/位置全过、死在最后尺寸关）。
-//        引擎兜底通道同步 13pt（图像 close 保持 20pt：图像✕需面积感防误触）。
-//   3g. Filza 自点根治（v3.2.3，通用分词规则）：
-//      ⑨ 英文词根改词边界匹配：真广告按钮是独立词「Skip」「Skip Ad」；
-//        文件名/包名里的 adskip 等词中碎片不再命中——插件自身文件名天然免疫。
-//        （中国移动顺带恢复秒跳：同一粗匹配曾干扰其识别链。）
-//   3d. 真机反馈三修复（v3.2.1，全通用机制）：
-//      ① 倒计时按钮：SDK 内部拦截点击到倒计时结束——重试上限按倒计时长度放宽，
-//        文字每秒刷新天然持续触发，点到按钮消失为止。
-//      ② 严防误点广告主图（跳转落地页）：容器内候选控件改"close 打分制"，
-//        角落+小面积+词根才及格；主图/居中大图负分淘汰，绝不点击。
-//      ③ 容器确认必须全屏（覆盖屏幕 ≥80%）：直播吧首页广告卡片类名含 adview
-//        词根误触发采样点卡片 x——非全屏组件一律不开锁、不采样。
-//   3c. 摇一摇广告带按钮的秒跳（v3.2.0）：shake 词根视图视为广告容器信号（开防摇+
-//      关字锁+图像✕扫描），按钮查找上限放宽到 300pt（通栏长条），引擎空转收摊阈值
-//      在容器已确认时放宽到 14 tick——按钮延迟出现也能等到、点到。
-//   4. 点击预算：每会话 ≤12 次；HID 物理注入限速 0.25s（QQ 手势崩溃根因）。
-//   5. 无内置黑名单；逃生口 = CFPreferences com.mg.adskip 的 excludedBundles 数组
-//      （用户级配置，默认不存在 = 不排除任何 app；改动后注销生效）。
-//
-// 会话模型：
-//   didFinishLaunching → 冷启动会话（15s 窗口）
-//   willEnterForeground → 回前台会话（8s 窗口，只点击无破坏）
-//   didEnterBackground  → 会话关闭，一切静默
-//   会话内出现首个广告信号 → 才创建 0.35s 轮询引擎（验证/兜底通道）
-//   会话结束或信号消失 → 引擎销毁
-// =====================================================================
-
 #ifdef ADSKIP_LOG
 #define ADLOG(fmt, ...) NSLog(@"[AdSkip] " fmt, ##__VA_ARGS__)
 #else
@@ -66,22 +17,21 @@ static NSTimeInterval nowTs(void) {
     return [[NSDate date] timeIntervalSinceReferenceDate];
 }
 
-// ============ 全局状态（全部会话级，后台即清零） ============
-static NSTimeInterval gSessionStart = 0;   // 当前会话起点
-static BOOL gSessionActive = NO;           // 会话开启才有任何动作
-static BOOL gColdSession = YES;            // 冷启动窗口 15s / 回前台窗口 8s
-static BOOL gSkipFired = NO;               // 本会话已完成跳过
+static NSTimeInterval gSessionStart = 0;
+static BOOL gSessionActive = NO;
+static BOOL gColdSession = YES;
+static BOOL gSkipFired = NO;
 static CFRunLoopTimerRef gEngineTimer = NULL;
 static int gTickCount = 0;
-static int gIdleTicks = 0;                 // 连续无命中计数（信号消失自动停引擎）
-static int gSessionTaps = 0;               // 点击预算
-static UIView *gLastTappedView = nil;      // 待验证的点击目标
+static int gIdleTicks = 0;
+static int gSessionTaps = 0;
+static UIView *gLastTappedView = nil;
 static int gTapRetry = 0;
-static BOOL gSignalSeen = NO;              // 本会话见过广告信号
+static BOOL gSignalSeen = NO;
 static NSTimeInterval gLastOcrTime = 0;
-static int gOcrShots = 0;                  // 每会话截图预算
-static NSTimeInterval gLastHID = 0;        // HID 注入限速
-static BOOL gAdContainerSeen = NO;         // 本会话已确认广告容器（关字/图像✕/防摇的钥匙）
+static int gOcrShots = 0;
+static NSTimeInterval gLastHID = 0;
+static BOOL gAdContainerSeen = NO;
 
 
 static BOOL isKeyboardProcess(void) {
@@ -89,43 +39,80 @@ static BOOL isKeyboardProcess(void) {
     if (pbid.length && ([pbid containsString:@".keyboard"] || [pbid containsString:@"inputmethod"]
         || [pbid hasSuffix:@".ime"])) return YES;
     return NO;
-}static BOOL gCountdownTarget = NO;         // 当前目标带倒计时文字（重试上限放宽标记）
+}static BOOL gCountdownTarget = NO;
 
-// ============ 用户级配置（外置，替代内置黑名单） ============
-static BOOL gUserDisabled = NO;            // disabled=true 全局关闭
-static NSArray *gUserExcluded = nil;       // excludedBundles 数组
+// ============ 用户级配置（Enabled + Apps） ============
+static BOOL gUserDisabled = NO;
+static NSDictionary *gEnabledApps = nil;
+static NSArray *gUserExcluded = nil;
 
-static void loadUserConfig(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        gUserExcluded = @[];
-        CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
-        CFTypeRef v = CFPreferencesCopyAppValue(CFSTR("disabled"), CFSTR("com.mg.adskip"));
-        if (v) {
-            if (CFGetTypeID(v) == CFBooleanGetTypeID()) gUserDisabled = CFBooleanGetValue((CFBooleanRef)v);
-            CFRelease(v);
+static NSDictionary *loadAdSkipPreferences(void)
+{
+    NSString *path = @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
+    NSDictionary *config = [NSDictionary dictionaryWithContentsOfFile:path];
+    if ([config isKindOfClass:[NSDictionary class]]) {
+        return config;
+    }
+    return @{};
+}
+
+static void loadUserConfig(void)
+{
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSDictionary *config = loadAdSkipPreferences();
+
+        NSNumber *enabled = config[@"Enabled"];
+        gUserDisabled = enabled ? ![enabled boolValue] : NO;
+
+        NSDictionary *apps = config[@"Apps"];
+        if ([apps isKindOfClass:[NSDictionary class]]) {
+            gEnabledApps = [apps copy];
+        } else {
+            gEnabledApps = @{};
         }
-        CFArrayRef arr = (CFArrayRef)CFPreferencesCopyAppValue(CFSTR("excludedBundles"), CFSTR("com.mg.adskip"));
-        if (arr) {
-            gUserExcluded = [(__bridge NSArray *)arr copy];
-            CFRelease(arr);
+
+        NSArray *excluded = config[@"excludedBundles"];
+        if ([excluded isKindOfClass:[NSArray class]]) {
+            gUserExcluded = [excluded copy];
+        } else {
+            gUserExcluded = @[];
+        }
+
+        NSNumber *legacyDisabled = config[@"disabled"];
+        if ([legacyDisabled isKindOfClass:[NSNumber class]] &&
+            [legacyDisabled boolValue]) {
+            gUserDisabled = YES;
         }
     });
 }
 
+static BOOL adSkipEnabledForCurrentApp(void)
+{
+    loadUserConfig();
 
-static BOOL userExcludedBundle(void) {
-    if (gUserDisabled) return YES;
-    if (!gUserExcluded.count) return NO;
-    NSString *bid = [[NSBundle mainBundle] bundleIdentifier];
-    if (!bid.length) return NO;
-    for (NSString *s in gUserExcluded) {
-        if ([s isKindOfClass:[NSString class]] && [bid caseInsensitiveCompare:s] == NSOrderedSame) return YES;
+    if (gUserDisabled) {
+        return NO;
     }
-    return NO;
+
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier;
+    if (bid.length == 0) {
+        return NO;
+    }
+
+    if ([bid isEqualToString:@"com.apple.Preferences"] ||
+        [bid isEqualToString:@"com.apple.springboard"]) {
+        return NO;
+    }
+
+    NSNumber *state = gEnabledApps[bid];
+    if (![state isKindOfClass:[NSNumber class]]) {
+        return NO;
+    }
+
+    return [state boolValue];
 }
 
-// ============ 会话管理 ============
 static void stopEngineTimer(void);
 
 static void beginSession(BOOL cold) {
@@ -156,19 +143,21 @@ static void endSession(void) {
 
 // 广告窗口判定：hook 热路径第一道门，必须最便宜（两次布尔 + 两次浮点比较）
 static BOOL inAdWindow(void) {
+    if (!adSkipEnabledForCurrentApp()) {
+        return NO;
+    }
+
     if (isKeyboardProcess()) return NO;   // keyboard extension processes never active
     if (!gSessionActive || gSkipFired) return NO;
+
     NSTimeInterval e = nowTs() - gSessionStart;
     return e >= 0 && e <= (gColdSession ? 15.0 : 8.0);
 }
 
-// ============ 词根/类名识别（v3.1.0 两级词表：跳过级 / 关闭级） ============
 // 一级「跳过」：正常 UI 里几乎不存在（新手引导除外），门控稍宽
 static BOOL containsSkipWordStrict(NSString *s) {
     if (!s.length || s.length > 40) return NO;
     if ([s containsString:@"跳过"] || [s containsString:@"跳過"]) return YES;
-    // 英文词根词边界匹配（v3.2.3）：skip 前后紧邻字母数字 = 词中碎片不算
-    // （Filza 文件名 com.mg.adskip_xxx 命中裸 containsString 是自点根因）
     NSString *low = s.lowercaseString;
     NSRange r = [low rangeOfString:@"skip"];
     while (r.location != NSNotFound) {
@@ -345,7 +334,6 @@ static UIView *findSkipButtonInView(UIView *v, int depth) {
     return nil;
 }
 
-// 容器内 close 打分制（v3.2.1 严防误点广告主图）：
 // 广告主图 = 点击跳转落地页的按钮（优酷误点跳拼多多根因），绝不能当 close 点。
 // 收集全部候选可点控件，按 close 特征打分，只点最高分且 ≥3 分的：
 //   +3 角落先验区（右上/右下）；+2 带跳过/关闭词根文字；+2 小面积(<容器8%)；
@@ -973,8 +961,6 @@ static BOOL tapSkipInAccessibility(void) {
 }
 
 // ============ OCR（最后手段：每会话最多 4 次截图，无 dispatch_sync） ============
-// 2.0.8 黑屏根因 = 后台队列 dispatch_sync(main) 截图，主线程被挂起时死锁。
-// v3 改法：本函数只在主线程调用，直接画图，Vision 异步回调。无任何同步跨队列。
 static CGRect bboxToScreenRect(CGRect bbox, CGSize size) {
     CGFloat x = bbox.origin.x * size.width;
     CGFloat y = (1.0 - bbox.origin.y - bbox.size.height) * size.height;
@@ -1115,8 +1101,6 @@ static void stopEngineTimer(void) {
     }
 }
 
-// 摇一摇触发视图（v3.2.0）：比 splash 词根更细的一级信号——只要会话内出现，
-// 就置位 gAdContainerSeen（开防摇 + 开关字锁 + 开图像✕扫描），但不主动触发点击。
 // 摇一摇广告的按钮跳过仍走正常通道（文字 hook / 采样 / 引擎兜底）。
 static BOOL isShakeAdView(UIView *v) {
     if (!v) return NO;
@@ -1299,7 +1283,6 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 }
 %end
 
-// ============ 防摇一摇（v3.1.0）：广告容器确认期间静默 CoreMotion ============
 // 摇一摇广告的跳转触发器是加速度传感器，不是任何视图——点它反而触发跳转。
 // 正确解法：容器确认期间拒绝 SDK 拿到传感器数据，摇一摇"摇不响"。
 // 安全边界：gAdContainerSeen 为 NO 时（无广告/非广告容器），%orig 原样放行，
@@ -1332,10 +1315,6 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
     loadUserConfig();
     if (userExcludedBundle()) return;
     // 会话在 %ctor 即开启（只赋时间戳+布尔，无 timer/无 OCR/无扫描——安全）。
-    // 覆盖 v27-15 实锤：冷启动广告容器挂载早于 didFinishLaunching 通知，
-    // 等通知再开会话会漏掉注入早期触发的 setText/didMoveToWindow 信号。
-    // 注：didMoveToWindow 早期触发时视图必须已挂 window 且过位置/尺寸门控才会点击，
-    //     OCR/引擎轮询仍要等信号出现（noteSignalAndArmEngine）才创建——无 OCR 早跑风险。
     beginSession(YES);
     @autoreleasepool {
         NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
