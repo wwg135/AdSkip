@@ -272,3 +272,4 @@ static NSString * const kAppsKey = @"Apps";
     [self reloadSpecifiers];
 }
 
+@end
