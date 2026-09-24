@@ -1,28 +1,40 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/Preferences.h>
 #import <spawn.h>
-#import <signal.h>
 
 #import "../AppScanner.h"
 
-static NSString * const kAdSkipDomain = @"com.mg.adskip";
+static NSString * const kPreferencesPath =
+    @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
+
 static NSString * const kEnabledKey = @"Enabled";
 static NSString * const kAppsKey = @"Apps";
 
 @interface AdSkipRootListController : PSListController
 
-@property(nonatomic, strong) NSArray<ADSkipApp *> *apps;
-@property(nonatomic, assign) NSInteger category;
+@property(nonatomic, strong) NSArray<ADSkipApp *> *allApps;
+@property(nonatomic, assign) NSInteger selectedCategory;
 
 @end
 
 @implementation AdSkipRootListController
 
-#pragma mark - PreferenceLoader
+- (instancetype)init
+{
+    self = [super init];
 
-- (NSMutableArray *)specifiers {
+    if (self) {
+        _selectedCategory = 0;
+        _allApps = [AppScanner scanApplications];
+    }
+
+    return self;
+}
+
+- (NSArray *)specifiers
+{
     if (!_specifiers) {
-        _specifiers = [[self buildSpecifiers] mutableCopy];
+        _specifiers = [self buildSpecifiers];
     }
 
     return _specifiers;
@@ -30,88 +42,63 @@ static NSString * const kAppsKey = @"Apps";
 
 #pragma mark - Configuration
 
-- (NSString *)configPath {
-    return @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
-}
+- (NSMutableDictionary *)configuration
+{
+    NSDictionary *saved =
+        [NSDictionary dictionaryWithContentsOfFile:kPreferencesPath];
 
-- (NSDictionary *)config {
-    NSDictionary *config =
-        [NSDictionary dictionaryWithContentsOfFile:[self configPath]];
+    NSMutableDictionary *config =
+        saved ? [saved mutableCopy] : [NSMutableDictionary dictionary];
 
-    if (![config isKindOfClass:[NSDictionary class]]) {
-        return @{};
+    if (![config[kEnabledKey] isKindOfClass:[NSNumber class]]) {
+        config[kEnabledKey] = @YES;
+    }
+
+    if (![config[kAppsKey] isKindOfClass:[NSDictionary class]]) {
+        config[kAppsKey] = @{};
     }
 
     return config;
 }
 
-- (NSMutableDictionary *)mutableConfig {
-    return [[self config] mutableCopy];
-}
-
-- (NSDictionary *)appStates {
-    NSDictionary *apps = [self config][kAppsKey];
-
-    if (![apps isKindOfClass:[NSDictionary class]]) {
-        return @{};
-    }
-
-    return apps;
-}
-
-- (void)writeConfig:(NSDictionary *)config {
-    if (![config isKindOfClass:[NSDictionary class]]) {
-        return;
-    }
-
-    [config writeToFile:[self configPath] atomically:YES];
-
-    NSDictionary *apps = config[kAppsKey];
-    NSNumber *enabled = config[kEnabledKey];
-
-    if (![enabled isKindOfClass:[NSNumber class]]) {
-        enabled = @YES;
-    }
-
-    if (![apps isKindOfClass:[NSDictionary class]]) {
-        apps = @{};
-    }
+- (void)saveConfiguration:(NSDictionary *)configuration
+{
+    [configuration writeToFile:kPreferencesPath atomically:YES];
 
     CFPreferencesSetAppValue(
-        (__bridge CFStringRef)kEnabledKey,
-        (__bridge CFPropertyListRef)enabled,
-        (__bridge CFStringRef)kAdSkipDomain
-    );
-
-    CFPreferencesSetAppValue(
-        (__bridge CFStringRef)kAppsKey,
-        (__bridge CFPropertyListRef)apps,
-        (__bridge CFStringRef)kAdSkipDomain
-    );
-
-    // 兼容现有 Tweak.xm 使用的 enabledApps 配置。
-    CFPreferencesSetAppValue(
-        CFSTR("enabledApps"),
-        (__bridge CFPropertyListRef)apps,
+        CFSTR("Enabled"),
+        (__bridge CFPropertyListRef)configuration[kEnabledKey],
         CFSTR("com.mg.adskip")
     );
 
-    CFPreferencesAppSynchronize(
-        (__bridge CFStringRef)kAdSkipDomain
+    CFPreferencesSetAppValue(
+        CFSTR("Apps"),
+        (__bridge CFPropertyListRef)configuration[kAppsKey],
+        CFSTR("com.mg.adskip")
     );
+
+    // 与旧版本配置保持兼容
+    CFPreferencesSetAppValue(
+        CFSTR("enabledApps"),
+        (__bridge CFPropertyListRef)configuration[kAppsKey],
+        CFSTR("com.mg.adskip")
+    );
+
+    CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
 }
 
-#pragma mark - Build specifiers
+#pragma mark - Specifiers
 
-- (NSArray *)buildSpecifiers {
-    NSMutableArray *result = [NSMutableArray array];
+- (NSArray *)buildSpecifiers
+{
+    NSMutableArray *specifiers = [NSMutableArray array];
 
     PSSpecifier *header =
-        [PSSpecifier groupSpecifierWithName:@"AdSkip\nSmart Ad Bypass"];
+        [PSSpecifier groupSpecifierWithName:@"AdSkip"];
 
-    [result addObject:header];
+    [specifiers addObject:header];
 
-    PSSpecifier *enabled =
+    PSSpecifier *globalSwitch =
         [PSSpecifier preferenceSpecifierNamed:@"启用插件"
                                         target:self
                                            set:@selector(setGlobalEnabled:specifier:)
@@ -120,38 +107,57 @@ static NSString * const kAppsKey = @"Apps";
                                           cell:PSSwitchCell
                                           edit:nil];
 
-    [enabled setProperty:kAdSkipDomain forKey:@"defaults"];
-    [enabled setProperty:kEnabledKey forKey:@"key"];
-    [enabled setProperty:@YES forKey:@"default"];
+    [specifiers addObject:globalSwitch];
 
-    [result addObject:enabled];
+    PSSpecifier *categoryGroup =
+        [PSSpecifier groupSpecifierWithName:@"应用分类"];
 
-    PSSpecifier *category =
-        [PSSpecifier preferenceSpecifierNamed:@"应用分类"
+    [specifiers addObject:categoryGroup];
+
+    PSSpecifier *allButton =
+        [PSSpecifier preferenceSpecifierNamed:@"全部"
                                         target:self
-                                           set:@selector(setCategory:specifier:)
-                                           get:@selector(categoryValue:)
+                                           set:nil
+                                           get:nil
                                         detail:nil
-                                          cell:PSSegmentCell
+                                          cell:PSButtonCell
                                           edit:nil];
 
-    [category setProperty:@[@"全部", @"商店", @"系统"] forKey:@"values"];
-    [category setProperty:@[@"全部", @"商店", @"系统"] forKey:@"titles"];
+    allButton.buttonAction = @selector(showAllApps);
+    [specifiers addObject:allButton];
 
-    [result addObject:category];
+    PSSpecifier *storeButton =
+        [PSSpecifier preferenceSpecifierNamed:@"商店"
+                                        target:self
+                                           set:nil
+                                           get:nil
+                                        detail:nil
+                                          cell:PSButtonCell
+                                          edit:nil];
+
+    storeButton.buttonAction = @selector(showStoreApps);
+    [specifiers addObject:storeButton];
+
+    PSSpecifier *systemButton =
+        [PSSpecifier preferenceSpecifierNamed:@"系统"
+                                        target:self
+                                           set:nil
+                                           get:nil
+                                        detail:nil
+                                          cell:PSButtonCell
+                                          edit:nil];
+
+    systemButton.buttonAction = @selector(showSystemApps);
+    [specifiers addObject:systemButton];
 
     PSSpecifier *appsGroup =
         [PSSpecifier groupSpecifierWithName:@"应用列表"];
 
-    [result addObject:appsGroup];
+    [specifiers addObject:appsGroup];
 
-    NSDictionary *states = [self appStates];
+    NSDictionary *appsState = [self configuration][kAppsKey];
 
     for (ADSkipApp *app in [self filteredApps]) {
-        if (![app.bundleID isKindOfClass:[NSString class]]) {
-            continue;
-        }
-
         PSSpecifier *appSpecifier =
             [PSSpecifier preferenceSpecifierNamed:app.displayName
                                             target:self
@@ -162,21 +168,24 @@ static NSString * const kAppsKey = @"Apps";
                                               edit:nil];
 
         [appSpecifier setProperty:app.bundleID forKey:@"bundleID"];
-        [appSpecifier setProperty:app.displayName forKey:@"appName"];
         [appSpecifier setProperty:app.type forKey:@"appType"];
-        [appSpecifier setProperty:app.bundleID forKey:@"key"];
-        [appSpecifier setProperty:app.bundleID forKey:@"footerText"];
+        [appSpecifier setProperty:app.displayName forKey:@"appName"];
 
-        NSNumber *state = states[app.bundleID];
+        NSNumber *state = appsState[app.bundleID];
 
-        if (![state isKindOfClass:[NSNumber class]]) {
+        if (!state) {
             state = @NO;
         }
 
-        [appSpecifier setProperty:state forKey:@"default"];
+        [appSpecifier setProperty:state forKey:@"defaultValue"];
 
-        [result addObject:appSpecifier];
+        [specifiers addObject:appSpecifier];
     }
+
+    PSSpecifier *respringGroup =
+        [PSSpecifier groupSpecifierWithName:@"应用设置后需要注销 SpringBoard 才会完全生效"];
+
+    [specifiers addObject:respringGroup];
 
     PSSpecifier *respring =
         [PSSpecifier preferenceSpecifierNamed:@"注销并应用设置"
@@ -187,153 +196,123 @@ static NSString * const kAppsKey = @"Apps";
                                           cell:PSButtonCell
                                           edit:nil];
 
-    [respring setButtonAction:@selector(respring)];
+    respring.buttonAction = @selector(respring);
+    [specifiers addObject:respring];
 
-    [result addObject:respring];
-
-    return result;
+    return specifiers;
 }
 
-#pragma mark - App filtering
-
-- (NSArray<ADSkipApp *> *)allApps {
-    if (!self.apps) {
-        self.apps = [AppScanner scanApplications];
+- (NSArray<ADSkipApp *> *)filteredApps
+{
+    if (self.selectedCategory == 0) {
+        return self.allApps;
     }
 
-    return self.apps;
-}
-
-- (NSArray<ADSkipApp *> *)filteredApps {
-    NSArray<ADSkipApp *> *apps = [self allApps];
-
-    if (self.category == 0) {
-        return apps;
-    }
-
-    NSString *wantedType =
-        self.category == 1 ? @"store" : @"system";
+    NSString *type =
+        self.selectedCategory == 1 ? @"store" : @"system";
 
     NSPredicate *predicate =
         [NSPredicate predicateWithBlock:^BOOL(ADSkipApp *app, NSDictionary *bindings) {
-            return [app.type isEqualToString:wantedType];
+            return [app.type isEqualToString:type];
         }];
 
-    return [apps filteredArrayUsingPredicate:predicate];
+    return [self.allApps filteredArrayUsingPredicate:predicate];
 }
 
 #pragma mark - Global switch
 
-- (BOOL)globalEnabled:(PSSpecifier *)specifier {
-    NSDictionary *config = [self config];
-    NSNumber *value = config[kEnabledKey];
-
-    if (![value isKindOfClass:[NSNumber class]]) {
-        return YES;
-    }
-
-    return [value boolValue];
+- (id)globalEnabled:(PSSpecifier *)specifier
+{
+    NSNumber *value = [self configuration][kEnabledKey];
+    return value ?: @YES;
 }
 
 - (void)setGlobalEnabled:(NSNumber *)value
-              specifier:(PSSpecifier *)specifier {
-    NSMutableDictionary *config = [self mutableConfig];
-
-    BOOL enabled = [value respondsToSelector:@selector(boolValue)]
-        ? [value boolValue]
-        : NO;
-
-    config[kEnabledKey] = @(enabled);
-
-    [self writeConfig:config];
+              specifier:(PSSpecifier *)specifier
+{
+    NSMutableDictionary *config = [self configuration];
+    config[kEnabledKey] = @([value boolValue]);
+    [self saveConfiguration:config];
 }
 
-#pragma mark - Category
+#pragma mark - App switches
 
-- (NSNumber *)categoryValue:(PSSpecifier *)specifier {
-    return @(self.category);
-}
+- (id)appEnabled:(PSSpecifier *)specifier
+{
+    NSString *bundleID = [specifier propertyForKey:@"bundleID"];
 
-- (void)setCategory:(NSNumber *)value
-         specifier:(PSSpecifier *)specifier {
-    self.category = value.integerValue;
+    NSDictionary *apps = [self configuration][kAppsKey];
+    NSNumber *value = apps[bundleID];
 
-    self.apps = nil;
-
-    [self reloadSpecifiers];
-}
-
-#pragma mark - Per-app switch
-
-- (BOOL)appEnabled:(PSSpecifier *)specifier {
-    NSString *bundleID =
-        [specifier propertyForKey:@"bundleID"];
-
-    if (![bundleID isKindOfClass:[NSString class]] ||
-        bundleID.length == 0) {
-        return NO;
-    }
-
-    NSDictionary *states = [self appStates];
-    NSNumber *value = states[bundleID];
-
-    if (![value isKindOfClass:[NSNumber class]]) {
-        return NO;
-    }
-
-    return [value boolValue];
+    return value ?: @NO;
 }
 
 - (void)setAppEnabled:(NSNumber *)value
-           specifier:(PSSpecifier *)specifier {
-    NSString *bundleID =
-        [specifier propertyForKey:@"bundleID"];
+            specifier:(PSSpecifier *)specifier
+{
+    NSString *bundleID = [specifier propertyForKey:@"bundleID"];
 
-    if (![bundleID isKindOfClass:[NSString class]] ||
-        bundleID.length == 0) {
+    if (bundleID.length == 0) {
         return;
     }
 
-    NSMutableDictionary *config = [self mutableConfig];
+    NSMutableDictionary *config = [self configuration];
     NSMutableDictionary *apps =
         [config[kAppsKey] mutableCopy];
 
-    if (![apps isKindOfClass:[NSMutableDictionary class]]) {
+    if (!apps) {
         apps = [NSMutableDictionary dictionary];
     }
 
-    BOOL enabled = [value respondsToSelector:@selector(boolValue)]
-        ? [value boolValue]
-        : NO;
-
-    apps[bundleID] = @(enabled);
+    apps[bundleID] = @([value boolValue]);
     config[kAppsKey] = apps;
 
-    [self writeConfig:config];
+    [self saveConfiguration:config];
+}
+
+#pragma mark - Categories
+
+- (void)showAllApps
+{
+    self.selectedCategory = 0;
+    [self reloadSpecifiers];
+}
+
+- (void)showStoreApps
+{
+    self.selectedCategory = 1;
+    [self reloadSpecifiers];
+}
+
+- (void)showSystemApps
+{
+    self.selectedCategory = 2;
+    [self reloadSpecifiers];
 }
 
 #pragma mark - Respring
 
-- (void)respring {
+- (void)respring
+{
     UIAlertController *alert =
         [UIAlertController alertControllerWithTitle:@"是否注销？"
-                                            message:@"注销 SpringBoard 后设置才会对所有应用生效。"
-                                     preferredStyle:UIAlertControllerStyleAlert];
+                                             message:@"注销 SpringBoard 后设置才会完全生效。"
+                                      preferredStyle:UIAlertControllerStyleAlert];
 
-    UIAlertAction *cancel =
+    [alert addAction:
         [UIAlertAction actionWithTitle:@"取消"
                                  style:UIAlertActionStyleCancel
-                               handler:nil];
+                               handler:nil]];
 
-    UIAlertAction *confirm =
+    [alert addAction:
         [UIAlertAction actionWithTitle:@"确定"
                                  style:UIAlertActionStyleDestructive
                                handler:^(__unused UIAlertAction *action) {
         pid_t pid = 0;
 
-        const char *args[] = {
-            "killall",
-            "SpringBoard",
+        char *const args[] = {
+            (char *)"killall",
+            (char *)"SpringBoard",
             NULL
         };
 
@@ -342,23 +321,12 @@ static NSString * const kAppsKey = @"Apps";
             "/usr/bin/killall",
             NULL,
             NULL,
-            (char * const *)args,
+            args,
             NULL
         );
-    }];
+    }]];
 
-    [alert addAction:cancel];
-    [alert addAction:confirm];
-
-    UIViewController *presenter = self;
-
-    if (self.navigationController.topViewController) {
-        presenter = self.navigationController.topViewController;
-    }
-
-    [presenter presentViewController:alert
-                            animated:YES
-                          completion:nil];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
