@@ -1312,7 +1312,7 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 // ============ 入口：%ctor 零动作，只挂 3 个会话通知 ============
 %ctor {
     loadUserConfig();
-    if (userExcludedBundle()) return;
+    if (!adSkipEnabledForCurrentApp()) return;
     // 会话在 %ctor 即开启（只赋时间戳+布尔，无 timer/无 OCR/无扫描——安全）。
     beginSession(YES);
     @autoreleasepool {

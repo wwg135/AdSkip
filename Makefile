@@ -1,4 +1,4 @@
-export TARGET ?= iphone:clang:16.5:15.0
+export TARGET ?= iphone:clang:latest
 
 include $(THEOS)/makefiles/common.mk
 
@@ -7,6 +7,7 @@ ARCHS = arm64 arm64e
 
 AdSkip_FILES = Tweak.xm
 AdSkip_CFLAGS = -fobjc-arc
+AdSkip_CFLAGS += -Wno-module-import-in-extern-c -Wno-deprecated-declarations
 AdSkip_LDFLAGS = -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Vision -framework IOKit
 
 BUNDLE_NAME = AdSkipPrefs
