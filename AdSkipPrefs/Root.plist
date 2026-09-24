@@ -6,5 +6,30 @@
     <string>广告跳过</string>
     <key>entry</key>
     <string>AdSkipRootListController</string>
+    <key>PreferenceSpecifiers</key>
+    <array>
+        <dict>
+            <key>cell</key>
+            <string>PSSegmentCell</string>
+            <key>label</key>
+            <string>应用分类</string>
+            <key>key</key>
+            <string>AppCategory</string>
+            <key>default</key>
+            <integer>0</integer>
+            <key>validTitles</key>
+            <array>
+                <string>全部</string>
+                <string>商店</string>
+                <string>系统</string>
+            </array>
+            <key>validValues</key>
+            <array>
+                <integer>0</integer>
+                <integer>1</integer>
+                <integer>2</integer>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
