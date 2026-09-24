@@ -2,7 +2,7 @@
 #import <Preferences/Preferences.h>
 #import <spawn.h>
 
-#import "../AppScanner.h"
+#import "AppScanner.h"
 
 static NSString * const kPreferencesPath =
     @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
