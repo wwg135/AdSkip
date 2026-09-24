@@ -1,0 +1,79 @@
+name: Build AdSkip packages
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ${{ matrix.scheme }} package
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scheme: rootless
+            theos_repository: https://github.com/theos/theos.git
+            artifact_name: AdSkip-rootless
+          - scheme: roothide
+            theos_repository: https://github.com/roothide/theos.git
+            artifact_name: AdSkip-roothide
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          brew update
+          brew install ldid dpkg make xz
+
+      - name: Checkout Theos
+        env:
+          THEOS_REPOSITORY: ${{ matrix.theos_repository }}
+        run: |
+          git clone --depth 1 "$THEOS_REPOSITORY" "$RUNNER_TEMP/theos"
+          echo "THEOS=$RUNNER_TEMP/theos" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/theos/bin" >> "$GITHUB_PATH"
+
+      - name: Install iOS SDK
+        run: |
+          SDK_URL="https://github.com/theos/sdks/releases/download/15.2-1/iPhoneOS15.2.sdk.tar.xz"
+          mkdir -p "$THEOS/sdks"
+          curl --fail --location --retry 3 "$SDK_URL" -o "$RUNNER_TEMP/iPhoneOS15.2.sdk.tar.xz"
+          tar -xJf "$RUNNER_TEMP/iPhoneOS15.2.sdk.tar.xz" -C "$THEOS/sdks"
+          test -d "$THEOS/sdks/iPhoneOS15.2.sdk"
+
+      - name: Build package
+        env:
+          THEOS_PACKAGE_SCHEME: ${{ matrix.scheme }}
+          PACKAGE_VERSION: 3.4.0
+        run: |
+          make clean package FINALPACKAGE=1
+          mkdir -p packages/${{ matrix.scheme }}
+          find packages -maxdepth 1 -type f -name '*.deb' -print -exec cp {} "packages/${{ matrix.scheme }}/" \;
+          test -n "$(find packages/${{ matrix.scheme }} -maxdepth 1 -type f -name '*.deb' -print -quit)"
+
+      - name: Validate package metadata
+        run: |
+          for deb in packages/${{ matrix.scheme }}/*.deb; do
+            dpkg-deb --info "$deb"
+            dpkg-deb --contents "$deb" | grep -E 'PreferenceLoader|AdSkipPrefs|AdSkip.dylib' || true
+          done
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: packages/${{ matrix.scheme }}/*.deb
+          if-no-files-found: error
+          retention-days: 14
