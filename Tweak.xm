@@ -42,67 +42,122 @@ static BOOL isKeyboardProcess(void) {
 }static BOOL gCountdownTarget = NO;
 
 // ============ 用户级配置（Enabled + Apps） ============
+
 static BOOL gUserDisabled = NO;
 static NSDictionary *gEnabledApps = nil;
 static NSArray *gUserExcluded = nil;
 static CFNotificationCenterRef gAdSkipDarwinCenter = NULL;
 
+static NSString *adSkipBundleID(void)
+{
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier;
+    return bid.length ? bid : @"";
+}
+
+static NSDictionary *adSkipDictionaryValue(CFPropertyListRef value)
+{
+    if (!value || CFGetTypeID(value) != CFDictionaryGetTypeID()) {
+        return nil;
+    }
+
+    id obj = CFBridgingRelease(CFRetain(value));
+    return [obj isKindOfClass:[NSDictionary class]] ? obj : nil;
+}
+
 static NSDictionary *loadAdSkipPreferences(void)
 {
+    NSMutableDictionary *config = [NSMutableDictionary dictionary];
+
+    // 优先用 plist 做主数据源，避免 cfprefsd 缓存导致旧值覆盖
     NSString *path = @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
     NSDictionary *fileConfig = [NSDictionary dictionaryWithContentsOfFile:path];
-    NSMutableDictionary *config = [fileConfig isKindOfClass:[NSDictionary class]]
-        ? [fileConfig mutableCopy]
-        : [NSMutableDictionary dictionary];
+    if ([fileConfig isKindOfClass:[NSDictionary class]]) {
+        [config addEntriesFromDictionary:fileConfig];
+    }
 
-    // Preferences can be cached by cfprefsd. Fall back to CFPreferences when
-    // the on-disk plist is stale or temporarily unavailable. The file remains
-    // the primary source so rootless/rootful installations behave identically.
+    CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
+
     CFPropertyListRef enabled = CFPreferencesCopyAppValue(CFSTR("Enabled"), CFSTR("com.mg.adskip"));
     CFPropertyListRef apps = CFPreferencesCopyAppValue(CFSTR("Apps"), CFSTR("com.mg.adskip"));
+    CFPropertyListRef legacyApps = CFPreferencesCopyAppValue(CFSTR("enabledApps"), CFSTR("com.mg.adskip"));
+
     if (enabled) {
-        config[@"Enabled"] = CFBridgingRelease(enabled);
-    }
-    if (apps) {
-        id value = CFBridgingRelease(apps);
-        if ([value isKindOfClass:[NSDictionary class]]) {
-            config[@"Apps"] = value;
+        id value = CFBridgingRelease(enabled);
+        if ([value isKindOfClass:[NSNumber class]]) {
+            config[@"Enabled"] = value;
         }
     }
+
+    NSDictionary *appsDict = adSkipDictionaryValue(apps);
+    NSDictionary *legacyDict = adSkipDictionaryValue(legacyApps);
+
+    if ([appsDict isKindOfClass:[NSDictionary class]] && appsDict.count > 0) {
+        config[@"Apps"] = appsDict;
+    } else if ([legacyDict isKindOfClass:[NSDictionary class]] && legacyDict.count > 0) {
+        config[@"Apps"] = legacyDict;
+    }
+
+    if (![config[@"Enabled"] isKindOfClass:[NSNumber class]]) {
+        config[@"Enabled"] = @YES;
+    }
+
+    if (![config[@"Apps"] isKindOfClass:[NSDictionary class]]) {
+        config[@"Apps"] = @{};
+    }
+
     return config;
 }
 
 static void loadUserConfig(void)
 {
-    {
-        NSDictionary *config = loadAdSkipPreferences();
+    NSDictionary *config = loadAdSkipPreferences();
 
-        NSNumber *enabled = config[@"Enabled"];
-        gUserDisabled = enabled ? ![enabled boolValue] : NO;
+    NSNumber *enabled = config[@"Enabled"];
+    gUserDisabled = enabled ? ![enabled boolValue] : NO;
 
-        NSDictionary *apps = config[@"Apps"];
-        if (![apps isKindOfClass:[NSDictionary class]]) {
-            apps = config[@"enabledApps"];
-        }
-        if ([apps isKindOfClass:[NSDictionary class]]) {
-            gEnabledApps = [apps copy];
-        } else {
-            gEnabledApps = @{};
-        }
+    NSDictionary *apps = config[@"Apps"];
+    gEnabledApps = [apps isKindOfClass:[NSDictionary class]] ? [apps copy] : @{};
 
-        NSArray *excluded = config[@"excludedBundles"];
-        if ([excluded isKindOfClass:[NSArray class]]) {
-            gUserExcluded = [excluded copy];
-        } else {
-            gUserExcluded = @[];
-        }
+    NSArray *excluded = config[@"excludedBundles"];
+    gUserExcluded = [excluded isKindOfClass:[NSArray class]] ? [excluded copy] : @[];
 
-        NSNumber *legacyDisabled = config[@"disabled"];
-        if ([legacyDisabled isKindOfClass:[NSNumber class]] &&
-            [legacyDisabled boolValue]) {
-            gUserDisabled = YES;
+    NSNumber *legacyDisabled = config[@"disabled"];
+    if ([legacyDisabled isKindOfClass:[NSNumber class]] &&
+        [legacyDisabled boolValue]) {
+        gUserDisabled = YES;
+    }
+
+    NSString *bid = adSkipBundleID();
+    NSNumber *state = gEnabledApps[bid];
+
+    ADLOG(@"config bundle=%@ enabled=%@ appState=%@ apps=%@",
+          bid,
+          enabled ?: @YES,
+          state ?: @NO,
+          gEnabledApps);
+}
+
+static BOOL userExcludedBundle(void)
+{
+    NSString *bid = adSkipBundleID();
+
+    if (gUserDisabled) {
+        return YES;
+    }
+
+    if ([bid isEqualToString:@"com.apple.Preferences"] ||
+        [bid isEqualToString:@"com.apple.springboard"]) {
+        return YES;
+    }
+
+    for (NSString *excluded in gUserExcluded) {
+        if ([excluded isKindOfClass:[NSString class]] &&
+            [bid caseInsensitiveCompare:excluded] == NSOrderedSame) {
+            return YES;
         }
     }
+
+    return NO;
 }
 
 static BOOL adSkipEnabledForCurrentApp(void)
@@ -113,7 +168,7 @@ static BOOL adSkipEnabledForCurrentApp(void)
         return NO;
     }
 
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier;
+    NSString *bid = adSkipBundleID();
     if (bid.length == 0) {
         return NO;
     }
@@ -125,10 +180,13 @@ static BOOL adSkipEnabledForCurrentApp(void)
 
     NSNumber *state = gEnabledApps[bid];
     if (![state isKindOfClass:[NSNumber class]]) {
+        ADLOG(@"disabled: no Apps entry for bundle=%@", bid);
         return NO;
     }
 
-    return [state boolValue];
+    BOOL enabled = [state boolValue];
+    ADLOG(@"enabled check bundle=%@ result=%d", bid, enabled);
+    return enabled;
 }
 
 static void stopEngineTimer(void);
@@ -138,7 +196,11 @@ static void adSkipPreferencesChanged(CFNotificationCenterRef center,
                                       void *observer,
                                       CFStringRef name,
                                       const void *object,
-                                      CFDictionaryRef userInfo);
+                                      CFDictionaryRef userInfo)
+{
+    loadUserConfig();
+    ADLOG(@"preferences changed, refresh config");
+}
 
 static void beginSession(BOOL cold) {
     stopEngineTimer();
@@ -1338,58 +1400,46 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 
 // ============ 入口：始终安装会话监听，支持设置即时生效 ============
 %ctor {
+    loadUserConfig();
+
+    CFNotificationCenterAddObserver(
+        CFNotificationCenterGetDarwinNotifyCenter(),
+        NULL,
+        adSkipPreferencesChanged,
+        CFSTR("com.mg.adskip.preferences.changed"),
+        NULL,
+        CFNotificationSuspensionBehaviorCoalesce
+    );
+
+    if (userExcludedBundle()) {
+        return;
+    }
+
+    beginSession(YES);
+
     @autoreleasepool {
-        NSString *processBundleID = [NSBundle mainBundle].bundleIdentifier ?: @"";
-        ADLOG(@"Loaded into %@", processBundleID);
-        loadUserConfig();
-        ADLOG(@"Injected into %@, enabled=%d, appState=%@", [NSBundle mainBundle].bundleIdentifier, !gUserDisabled, gEnabledApps);
-
-        // 不再因为启动时开关为 NO 而直接 return。旧逻辑一旦 return，
-        // Settings 里后来打开某个 App 的开关，已运行的 App 永远不会重新
-        // 建立会话，因此用户会感觉“开关不生效”。
-        gAdSkipDarwinCenter = CFNotificationCenterGetDarwinNotifyCenter();
-        CFNotificationCenterAddObserver(gAdSkipDarwinCenter,
-                                        NULL,
-                                        adSkipPreferencesChanged,
-                                        CFSTR("com.mg.adskip.preferences.changed"),
-                                        NULL,
-                                        CFNotificationSuspensionBehaviorDeliverImmediately);
-
         NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
 
         [nc addObserverForName:UIApplicationDidFinishLaunchingNotification
-                        object:nil queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *note) {
-            loadUserConfig();
-            if (adSkipEnabledForCurrentApp()) {
-                beginSession(YES);
-            } else {
-                endSession();
-            }
+                            object:nil
+                            queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+            beginSession(YES);
         }];
 
         [nc addObserverForName:UIApplicationWillEnterForegroundNotification
-                        object:nil queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *note) {
-            loadUserConfig();
-            if (adSkipEnabledForCurrentApp()) {
-                beginSession(NO);
-            } else {
-                endSession();
-            }
-        }];
-
-        [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
-                        object:nil queue:[NSOperationQueue mainQueue]
-                    usingBlock:^(NSNotification *note) {
-            endSession();
-        }];
-
-        // If the process was injected after launch, honor the setting without
-        // requiring another lifecycle notification.
-        if (adSkipEnabledForCurrentApp()) {
+                            object:nil
+                            queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
             beginSession(YES);
-        }
+        }];
+
+        [nc addObserverForName:UIApplicationDidBecomeActiveNotification
+                            object:nil
+                            queue:[NSOperationQueue mainQueue]
+                        usingBlock:^(NSNotification *note) {
+            beginSession(YES);
+        }];
     }
 }
 
