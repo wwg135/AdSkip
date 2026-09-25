@@ -8,6 +8,7 @@ static NSString * const kPreferencesPath =
 
 static NSString * const kEnabledKey = @"Enabled";
 static NSString * const kAppsKey = @"Apps";
+static NSString * const kCategoryKey = @"AppCategory";
 
 @interface AdSkipRootListController : PSListController
 
@@ -22,12 +23,13 @@ static NSString * const kAppsKey = @"Apps";
 - (instancetype)init
 {
     self = [super init];
-
     if (self) {
-        _selectedCategory = [[[NSUserDefaults standardUserDefaults] objectForKey:@"AppCategory"] integerValue];
+        _selectedCategory = [[NSUserDefaults standardUserDefaults] integerForKey:kCategoryKey];
+        if (_selectedCategory < 0 || _selectedCategory > 2) {
+            _selectedCategory = 0;
+        }
         _allApps = @[];
     }
-
     return self;
 }
 
@@ -37,47 +39,81 @@ static NSString * const kAppsKey = @"Apps";
 
     self.navigationItem.title = @"广告跳过";
 
-    self.categoryControl = [[UISegmentedControl alloc] initWithItems:@[@"全部", @"商店", @"系统"]];
+    // The category selector is a real Preferences table section header rather
+    // than a separate Preference cell. This keeps it directly above the app
+    // rows and avoids the old "应用分类 >" secondary page.
+    self.categoryControl = [[UISegmentedControl alloc] initWithItems:@[
+        @"全部", @"商店", @"系统"
+    ]];
     self.categoryControl.selectedSegmentIndex = self.selectedCategory;
-    [self.categoryControl addTarget:self action:@selector(categoryChanged:) forControlEvents:UIControlEventValueChanged];
+    [self.categoryControl addTarget:self
+                             action:@selector(categoryChanged:)
+                   forControlEvents:UIControlEventValueChanged];
 
-    UIView *header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, self.view.bounds.size.width, 54)];
-    self.categoryControl.frame = CGRectMake(20, 10, header.bounds.size.width - 40, 34);
-    self.categoryControl.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    [header addSubview:self.categoryControl];
-    self.table.tableHeaderView = header;
+    self.categoryControl.accessibilityLabel = @"应用分类";
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
     self.allApps = [AppScanner scanApplications];
+    _specifiers = nil;
     [self reloadSpecifiers];
 }
+
+#pragma mark - Category header
+
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section
+{
+    // Section 0 is the global switch section. Section 1 is the app-control
+    // section created by buildSpecifiers below.
+    if (section != 1) {
+        return nil;
+    }
+
+    UIView *container = [[UIView alloc] initWithFrame:CGRectZero];
+    container.backgroundColor = [UIColor clearColor];
+
+    self.categoryControl.selectedSegmentIndex = self.selectedCategory;
+    self.categoryControl.translatesAutoresizingMaskIntoConstraints = NO;
+    [container addSubview:self.categoryControl];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.categoryControl.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:16.0],
+        [self.categoryControl.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-16.0],
+        [self.categoryControl.centerYAnchor constraintEqualToAnchor:container.centerYAnchor],
+        [self.categoryControl.heightAnchor constraintEqualToConstant:32.0]
+    ]];
+
+    return container;
+}
+
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section
+{
+    if (section == 1) {
+        return 50.0;
+    }
+    return [super tableView:tableView heightForHeaderInSection:section];
+}
+
+#pragma mark - Specifiers
 
 - (NSArray *)specifiers
 {
     if (!_specifiers) {
         _specifiers = [[self buildSpecifiers] mutableCopy];
     }
-
     return _specifiers;
 }
 
-#pragma mark - Configuration
-
 - (NSMutableDictionary *)configuration
 {
-    NSDictionary *saved =
-        [NSDictionary dictionaryWithContentsOfFile:kPreferencesPath];
-
-    NSMutableDictionary *config =
-        saved ? [saved mutableCopy] : [NSMutableDictionary dictionary];
+    NSDictionary *saved = [NSDictionary dictionaryWithContentsOfFile:kPreferencesPath];
+    NSMutableDictionary *config = saved ? [saved mutableCopy] : [NSMutableDictionary dictionary];
 
     if (![config[kEnabledKey] isKindOfClass:[NSNumber class]]) {
         config[kEnabledKey] = @YES;
     }
-
     if (![config[kAppsKey] isKindOfClass:[NSDictionary class]]) {
         config[kAppsKey] = @{};
     }
@@ -89,28 +125,17 @@ static NSString * const kAppsKey = @"Apps";
 {
     [configuration writeToFile:kPreferencesPath atomically:YES];
 
-    CFPreferencesSetAppValue(
-        CFSTR("Enabled"),
-        (__bridge CFPropertyListRef)configuration[kEnabledKey],
-        CFSTR("com.mg.adskip")
-    );
-
-    CFPreferencesSetAppValue(
-        CFSTR("Apps"),
-        (__bridge CFPropertyListRef)configuration[kAppsKey],
-        CFSTR("com.mg.adskip")
-    );
-
-    CFPreferencesSetAppValue(
-        CFSTR("enabledApps"),
-        (__bridge CFPropertyListRef)configuration[kAppsKey],
-        CFSTR("com.mg.adskip")
-    );
-
+    CFPreferencesSetAppValue(CFSTR("Enabled"),
+                             (__bridge CFPropertyListRef)configuration[kEnabledKey],
+                             CFSTR("com.mg.adskip"));
+    CFPreferencesSetAppValue(CFSTR("Apps"),
+                             (__bridge CFPropertyListRef)configuration[kAppsKey],
+                             CFSTR("com.mg.adskip"));
+    CFPreferencesSetAppValue(CFSTR("enabledApps"),
+                             (__bridge CFPropertyListRef)configuration[kAppsKey],
+                             CFSTR("com.mg.adskip"));
     CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
 }
-
-#pragma mark - Specifiers
 
 - (NSMutableArray *)buildSpecifiers
 {
@@ -120,9 +145,8 @@ static NSString * const kAppsKey = @"Apps";
 
     NSMutableArray *specifiers = [NSMutableArray array];
 
-    PSSpecifier *header =
-        [PSSpecifier groupSpecifierWithName:@"🛡️ 广告跳过"];
-
+    // Section 0: global switch.
+    PSSpecifier *header = [PSSpecifier groupSpecifierWithName:@"🛡️ 广告跳过"];
     [specifiers addObject:header];
 
     PSSpecifier *globalSwitch =
@@ -133,14 +157,12 @@ static NSString * const kAppsKey = @"Apps";
                                         detail:nil
                                           cell:PSSwitchCell
                                           edit:nil];
-
     [specifiers addObject:globalSwitch];
 
-    NSString *categoryName = self.selectedCategory == 1 ? @"商店应用" : (self.selectedCategory == 2 ? @"系统应用" : @"全部应用");
-
+    // Section 1: app controls. The UISegmentedControl is rendered as this
+    // section's native table header, immediately above the app rows.
     PSSpecifier *appsGroup =
-        [PSSpecifier groupSpecifierWithName:categoryName];
-
+        [PSSpecifier groupSpecifierWithName:@"应用控制"];
     [specifiers addObject:appsGroup];
 
     NSDictionary *appsState = [self configuration][kAppsKey];
@@ -159,21 +181,22 @@ static NSString * const kAppsKey = @"Apps";
         [appSpecifier setProperty:app.type forKey:@"appType"];
         [appSpecifier setProperty:app.displayName forKey:@"appName"];
         [appSpecifier setProperty:app.iconPath ?: @"" forKey:@"iconPath"];
+
+        // PreferenceLoader understands iconImage for a PSSwitchCell. Keep the
+        // path too for compatibility with versions that load icons themselves.
+        if (app.iconImage) {
+            [appSpecifier setProperty:app.iconImage forKey:@"iconImage"];
+        }
         if (app.iconPath.length > 0) {
             [appSpecifier setProperty:app.iconPath forKey:@"icon"];
         }
 
         NSNumber *state = appsState[app.bundleID];
-        if (!state) {
-            state = @NO;
-        }
-
-        [appSpecifier setProperty:state forKey:@"defaultValue"];
+        [appSpecifier setProperty:(state ?: @NO) forKey:@"defaultValue"];
         [specifiers addObject:appSpecifier];
     }
 
-    PSSpecifier *resetGroup =
-        [PSSpecifier groupSpecifierWithName:@"其他设置"];
+    PSSpecifier *resetGroup = [PSSpecifier groupSpecifierWithName:@"其他设置"];
     [specifiers addObject:resetGroup];
 
     PSSpecifier *reset =
@@ -197,12 +220,9 @@ static NSString * const kAppsKey = @"Apps";
     }
 
     NSString *type = self.selectedCategory == 1 ? @"store" : @"system";
-
-    NSPredicate *predicate =
-        [NSPredicate predicateWithBlock:^BOOL(ADSkipApp *app, NSDictionary *bindings) {
-            return [app.type isEqualToString:type];
-        }];
-
+    NSPredicate *predicate = [NSPredicate predicateWithBlock:^BOOL(ADSkipApp *app, NSDictionary *bindings) {
+        return [app.type isEqualToString:type];
+    }];
     return [self.allApps filteredArrayUsingPredicate:predicate];
 }
 
@@ -214,8 +234,7 @@ static NSString * const kAppsKey = @"Apps";
     return value ?: @YES;
 }
 
-- (void)setGlobalEnabled:(NSNumber *)value
-              specifier:(PSSpecifier *)specifier
+- (void)setGlobalEnabled:(NSNumber *)value specifier:(PSSpecifier *)specifier
 {
     NSMutableDictionary *config = [self configuration];
     config[kEnabledKey] = @([value boolValue]);
@@ -225,25 +244,13 @@ static NSString * const kAppsKey = @"Apps";
 
 #pragma mark - Category
 
-
 - (void)categoryChanged:(UISegmentedControl *)sender
 {
     self.selectedCategory = sender.selectedSegmentIndex;
-    [[NSUserDefaults standardUserDefaults] setInteger:self.selectedCategory forKey:@"AppCategory"];
+    [[NSUserDefaults standardUserDefaults] setInteger:self.selectedCategory forKey:kCategoryKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
-    _specifiers = nil;
-    [self reloadSpecifiers];
-}
 
-- (id)category:(PSSpecifier *)specifier
-{
-    return @(self.selectedCategory);
-}
-
-- (void)setCategory:(NSNumber *)value
-          specifier:(PSSpecifier *)specifier
-{
-    self.selectedCategory = [value integerValue];
+    // Rebuild only the app section. The controller remains on the same page.
     _specifiers = nil;
     [self reloadSpecifiers];
 }
@@ -253,37 +260,34 @@ static NSString * const kAppsKey = @"Apps";
 - (id)appEnabled:(PSSpecifier *)specifier
 {
     NSString *bundleID = [specifier propertyForKey:@"bundleID"];
+    if (bundleID.length == 0) {
+        return @NO;
+    }
 
     NSDictionary *apps = [self configuration][kAppsKey];
-    NSNumber *value = apps[bundleID];
-
-    return value ?: @NO;
+    return apps[bundleID] ?: @NO;
 }
 
-- (void)setAppEnabled:(NSNumber *)value
-            specifier:(PSSpecifier *)specifier
+- (void)setAppEnabled:(NSNumber *)value specifier:(PSSpecifier *)specifier
 {
     NSString *bundleID = [specifier propertyForKey:@"bundleID"];
-
     if (bundleID.length == 0) {
         return;
     }
 
     NSMutableDictionary *config = [self configuration];
     NSMutableDictionary *apps = [config[kAppsKey] mutableCopy];
-
     if (!apps) {
         apps = [NSMutableDictionary dictionary];
     }
 
     apps[bundleID] = @([value boolValue]);
     config[kAppsKey] = apps;
-
     [self saveConfiguration:config];
-    [self reloadSpecifiers];
+
+    // Do not rebuild the table after every app toggle; the native switch will
+    // remain in place and the value is already persisted immediately.
 }
-
-
 
 #pragma mark - Reset
 
@@ -293,8 +297,13 @@ static NSString * const kAppsKey = @"Apps";
     config[kEnabledKey] = @NO;
     config[kAppsKey] = @{};
     [self saveConfiguration:config];
+
+    self.selectedCategory = 0;
+    [[NSUserDefaults standardUserDefaults] setInteger:0 forKey:kCategoryKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    _specifiers = nil;
     [self reloadSpecifiers];
 }
-
 
 @end
