@@ -41,122 +41,68 @@ static BOOL isKeyboardProcess(void) {
     return NO;
 }static BOOL gCountdownTarget = NO;
 
-// ============ 用户级配置（Enabled + Apps） ==========
-
+// ============ 用户级配置（Enabled + Apps） ============
 static BOOL gUserDisabled = NO;
 static NSDictionary *gEnabledApps = nil;
 static NSArray *gUserExcluded = nil;
-
-static NSString *adSkipBundleID(void)
-{
-    NSString *bid = [NSBundle mainBundle].bundleIdentifier;
-    return bid.length ? bid : @"";
-}
-
-static NSDictionary *adSkipDictionaryValue(CFPropertyListRef value)
-{
-    if (!value || CFGetTypeID(value) != CFDictionaryGetTypeID()) {
-        return nil;
-    }
-
-    id obj = CFBridgingRelease(CFRetain(value));
-    return [obj isKindOfClass:[NSDictionary class]] ? obj : nil;
-}
+static CFNotificationCenterRef gAdSkipDarwinCenter = NULL;
 
 static NSDictionary *loadAdSkipPreferences(void)
 {
-    NSMutableDictionary *config = [NSMutableDictionary dictionary];
-
-    // 优先用 plist 做主数据源，避免 cfprefsd 缓存导致旧值覆盖
     NSString *path = @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
     NSDictionary *fileConfig = [NSDictionary dictionaryWithContentsOfFile:path];
-    if ([fileConfig isKindOfClass:[NSDictionary class]]) {
-        [config addEntriesFromDictionary:fileConfig];
-    }
+    NSMutableDictionary *config = [fileConfig isKindOfClass:[NSDictionary class]]
+        ? [fileConfig mutableCopy]
+        : [NSMutableDictionary dictionary];
 
-    CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
-
+    // Preferences can be cached by cfprefsd. Fall back to CFPreferences when
+    // the on-disk plist is stale or temporarily unavailable. The file remains
+    // the primary source so rootless/rootful installations behave identically.
     CFPropertyListRef enabled = CFPreferencesCopyAppValue(CFSTR("Enabled"), CFSTR("com.mg.adskip"));
     CFPropertyListRef apps = CFPreferencesCopyAppValue(CFSTR("Apps"), CFSTR("com.mg.adskip"));
-    CFPropertyListRef legacyApps = CFPreferencesCopyAppValue(CFSTR("enabledApps"), CFSTR("com.mg.adskip"));
-
     if (enabled) {
-        id value = CFBridgingRelease(enabled);
-        if ([value isKindOfClass:[NSNumber class]]) {
-            config[@"Enabled"] = value;
+        config[@"Enabled"] = CFBridgingRelease(enabled);
+    }
+    if (apps) {
+        id value = CFBridgingRelease(apps);
+        if ([value isKindOfClass:[NSDictionary class]]) {
+            config[@"Apps"] = value;
         }
     }
-
-    NSDictionary *appsDict = adSkipDictionaryValue(apps);
-    NSDictionary *legacyDict = adSkipDictionaryValue(legacyApps);
-
-    if ([appsDict isKindOfClass:[NSDictionary class]] && appsDict.count > 0) {
-        config[@"Apps"] = appsDict;
-    } else if ([legacyDict isKindOfClass:[NSDictionary class]] && legacyDict.count > 0) {
-        config[@"Apps"] = legacyDict;
-    }
-
-    if (![config[@"Enabled"] isKindOfClass:[NSNumber class]]) {
-        config[@"Enabled"] = @YES;
-    }
-
-    if (![config[@"Apps"] isKindOfClass:[NSDictionary class]]) {
-        config[@"Apps"] = @{};
-    }
-
     return config;
 }
 
 static void loadUserConfig(void)
 {
-    NSDictionary *config = loadAdSkipPreferences();
+    {
+        NSDictionary *config = loadAdSkipPreferences();
 
-    NSNumber *enabled = config[@"Enabled"];
-    gUserDisabled = enabled ? ![enabled boolValue] : NO;
+        NSNumber *enabled = config[@"Enabled"];
+        gUserDisabled = enabled ? ![enabled boolValue] : NO;
 
-    NSDictionary *apps = config[@"Apps"];
-    gEnabledApps = [apps isKindOfClass:[NSDictionary class]] ? [apps copy] : @{};
+        NSDictionary *apps = config[@"Apps"];
+        if (![apps isKindOfClass:[NSDictionary class]]) {
+            apps = config[@"enabledApps"];
+        }
+        if ([apps isKindOfClass:[NSDictionary class]]) {
+            gEnabledApps = [apps copy];
+        } else {
+            gEnabledApps = @{};
+        }
 
-    NSArray *excluded = config[@"excludedBundles"];
-    gUserExcluded = [excluded isKindOfClass:[NSArray class]] ? [excluded copy] : @[];
+        NSArray *excluded = config[@"excludedBundles"];
+        if ([excluded isKindOfClass:[NSArray class]]) {
+            gUserExcluded = [excluded copy];
+        } else {
+            gUserExcluded = @[];
+        }
 
-    NSNumber *legacyDisabled = config[@"disabled"];
-    if ([legacyDisabled isKindOfClass:[NSNumber class]] &&
-        [legacyDisabled boolValue]) {
-        gUserDisabled = YES;
-    }
-
-    NSString *bid = adSkipBundleID();
-    NSNumber *state = gEnabledApps[bid];
-
-    ADLOG(@"config bundle=%@ enabled=%@ appState=%@ apps=%@",
-          bid,
-          enabled ?: @YES,
-          state ?: @NO,
-          gEnabledApps);
-}
-
-static BOOL userExcludedBundle(void)
-{
-    NSString *bid = adSkipBundleID();
-
-    if (gUserDisabled) {
-        return YES;
-    }
-
-    if ([bid isEqualToString:@"com.apple.Preferences"] ||
-        [bid isEqualToString:@"com.apple.springboard"]) {
-        return YES;
-    }
-
-    for (NSString *excluded in gUserExcluded) {
-        if ([excluded isKindOfClass:[NSString class]] &&
-            [bid caseInsensitiveCompare:excluded] == NSOrderedSame) {
-            return YES;
+        NSNumber *legacyDisabled = config[@"disabled"];
+        if ([legacyDisabled isKindOfClass:[NSNumber class]] &&
+            [legacyDisabled boolValue]) {
+            gUserDisabled = YES;
         }
     }
-
-    return NO;
 }
 
 static BOOL adSkipEnabledForCurrentApp(void)
@@ -167,7 +113,7 @@ static BOOL adSkipEnabledForCurrentApp(void)
         return NO;
     }
 
-    NSString *bid = adSkipBundleID();
+    NSString *bid = [NSBundle mainBundle].bundleIdentifier;
     if (bid.length == 0) {
         return NO;
     }
@@ -179,13 +125,10 @@ static BOOL adSkipEnabledForCurrentApp(void)
 
     NSNumber *state = gEnabledApps[bid];
     if (![state isKindOfClass:[NSNumber class]]) {
-        ADLOG(@"disabled: no Apps entry for bundle=%@", bid);
         return NO;
     }
 
-    BOOL enabled = [state boolValue];
-    ADLOG(@"enabled check bundle=%@ result=%d", bid, enabled);
-    return enabled;
+    return [state boolValue];
 }
 
 static void stopEngineTimer(void);
@@ -195,11 +138,7 @@ static void adSkipPreferencesChanged(CFNotificationCenterRef center,
                                       void *observer,
                                       CFStringRef name,
                                       const void *object,
-                                      CFDictionaryRef userInfo)
-{
-    loadUserConfig();
-    ADLOG(@"preferences changed, refresh config");
-}
+                                      CFDictionaryRef userInfo);
 
 static void beginSession(BOOL cold) {
     stopEngineTimer();
@@ -224,6 +163,14 @@ static void beginSession(BOOL cold) {
     // the short-lived polling engine at session start guarantees those apps
     // still get a chance to be detected after injection.
     startEngineTimer();
+}
+
+static void endSession(void) {
+    stopEngineTimer();
+    gSessionActive = NO;
+    gSkipFired = NO;
+    gAdContainerSeen = NO;
+    gLastTappedView = nil;
 }
 
 // 广告窗口判定：hook 热路径第一道门，必须最便宜（两次布尔 + 两次浮点比较）
@@ -639,8 +586,8 @@ static void simulateTapAtWindowPoint(UIWindow *win, CGPoint pt) {
 }
 
 // ===== HID 物理注入（AutoTouch 同款，穿越 SDK 反合成触摸检测） =====
-static void *(*S_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, Boolean, Boolean, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t) = NULL;
-static void *(*S_IOHIDEventCreateDigitizerFingerEventWithQuality)(CFAllocatorRef, uint32_t, uint32_t, uint32_t, uint32_t, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, Boolean, Boolean, uint32_t, uint32_t) = NULL;
+static void *(*S_IOHIDEventCreateDigitizerEvent)(CFAllocatorRef, uint32_t, uint32_t, uint32_t, uint32_t, uint64_t, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, Boolean, Boolean, uint32_t, uint32_t) = NULL;
+static void *(*S_IOHIDEventCreateDigitizerFingerEventWithQuality)(CFAllocatorRef, uint32_t, uint32_t, uint32_t, uint32_t, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, CFIndex, Boolean, Boolean, uint32_t) = NULL;
 static void *(*S_IOHIDEventAppendEvent)(void*, void*) = NULL;
 
 static void initHidSymbols(void) {
@@ -989,25 +936,477 @@ static void aclScan(id container, int depth) {
                 el = ((id(*)(id,SEL,NSInteger))objc_msgSend)(container, sa, i);
             }
             if (!el) continue;
-            // ...
+            NSString *label = nil, *value = nil, *hint = nil;
+            @try { label = [el accessibilityLabel]; if (![label isKindOfClass:[NSString class]]) label = nil; } @catch (NSException *e) {}
+            @try { value = [el accessibilityValue]; if (![value isKindOfClass:[NSString class]]) value = nil; } @catch (NSException *e) {}
+            @try { hint = [el accessibilityHint]; if (![hint isKindOfClass:[NSString class]]) hint = nil; } @catch (NSException *e) {}
+            BOOL isHit = (label.length && containsSkipWordStrict(label))
+                      || (value.length && containsSkipWordStrict(value))
+                      || (hint.length && containsSkipWordStrict(hint));
+            if (!isHit) { aclScan(el, depth + 1); continue; }
+            @try {
+                CGRect fr = CGRectNull;
+                id frv = [el valueForKey:@"accessibilityFrame"];
+                if ([frv isKindOfClass:[NSValue class]]) fr = [frv CGRectValue];
+                if (CGRectIsNull(fr)) {
+                    Class vc = NSClassFromString(@"UIView");
+                    if (vc && [el isKindOfClass:vc]) { gAclFoundView = (UIView *)el; return; }
+                    aclScan(el, depth + 1);
+                    continue;
+                }
+                CGFloat cx = fr.origin.x + fr.size.width / 2.0;
+                CGFloat cy = fr.origin.y + fr.size.height / 2.0;
+                if (cx > 0 && cy > 0 && cx < [UIScreen mainScreen].bounds.size.width
+                    && cy < [UIScreen mainScreen].bounds.size.height) {
+                    gAclFoundFrame = fr; gAclFoundFrameValid = YES; return;
+                }
+            } @catch (NSException *e) {}
         }
     } @catch (NSException *e) {}
 }
 
-static void aclFindFirstMatch(UIView *root) {
+static BOOL tapSkipInAccessibility(void) {
     @try {
-        if (!root || root.hidden || root.alpha < 0.05) return;
-        aclScan(root, 0);
-        for (UIView *sub in root.subviews) {
-            aclFindFirstMatch(sub);
-            if (gAclFoundView || gAclFoundFrameValid) return;
+        id app = [UIApplication performSelector:@selector(sharedApplication)];
+        if (!app) return NO;
+        NSArray *windows = [app performSelector:@selector(windows)];
+        for (UIWindow *win in windows) {
+            if (!win || win.hidden) continue;
+            gAclFoundView = nil; gAclFoundFrameValid = NO;
+            aclScan(win, 0);
+            if (gAclFoundView) {
+                tapView(gAclFoundView);
+                return YES;
+            }
+            if (gAclFoundFrameValid) {
+                CGFloat cx = gAclFoundFrame.origin.x + gAclFoundFrame.size.width / 2.0;
+                CGFloat cy = gAclFoundFrame.origin.y + gAclFoundFrame.size.height / 2.0;
+                tapPointAtWindow([UIApplication performSelector:@selector(keyWindow)], CGPointMake(cx, cy));
+                return YES;
+            }
         }
+        return NO;
+    } @catch (NSException *e) {
+        return NO;
+    }
+}
+
+// ============ OCR（最后手段：每会话最多 4 次截图，无 dispatch_sync） ============
+static CGRect bboxToScreenRect(CGRect bbox, CGSize size) {
+    CGFloat x = bbox.origin.x * size.width;
+    CGFloat y = (1.0 - bbox.origin.y - bbox.size.height) * size.height;
+    return CGRectMake(x, y, bbox.size.width * size.width, bbox.size.height * size.height);
+}
+
+static void runOCROnMain(void) {
+    if (!inAdWindow()) return;
+    NSTimeInterval now = nowTs();
+    if (now - gLastOcrTime < 1.2) return;   // 节流
+    if (gOcrShots >= 4) return;             // 每会话截图预算
+    gOcrShots++;
+    gLastOcrTime = now;
+    // 此刻必然在主线程（engine timer 挂主 runloop）
+    UIWindow *shotWin = nil;
+    CGRect screenBounds = CGRectZero;
+    @try {
+        id app = [UIApplication performSelector:@selector(sharedApplication)];
+        NSArray *wins = [app performSelector:@selector(windows)];
+        NSArray *sorted = [wins sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            CGFloat la = [a windowLevel], lb = [b windowLevel];
+            if (la > lb) return NSOrderedAscending;
+            if (la < lb) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+        for (UIWindow *w in sorted) {
+            if (!w || w.hidden) continue;
+            CGRect b = w.bounds;
+            if (CGRectIsEmpty(b) || b.size.width < 200 || b.size.height < 200) continue;
+            shotWin = w;
+            screenBounds = b;
+            break;
+        }
+        if (!shotWin) return;
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:screenBounds.size];
+        UIImage *shot = [renderer imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+            [shotWin drawViewHierarchyInRect:CGRectMake(0, 0, screenBounds.size.width, screenBounds.size.height) afterScreenUpdates:YES];
+        }];
+        if (!shot) return;
+        Class handlerCls = NSClassFromString(@"VNImageRequestHandler");
+        Class reqCls = NSClassFromString(@"VNRecognizeTextRequest");
+        if (!handlerCls || !reqCls) return;
+        UIWindow *w = shotWin;
+        CGSize sz = screenBounds.size;
+        id request = [[reqCls alloc] performSelector:@selector(initWithCompletionHandler:)
+                                          withObject:^(id req, NSError *err) {
+            // Vision 回调（后台线程）：只做文字匹配，点击回主线程
+            if (err || !inAdWindow()) return;
+            NSArray *results = [req performSelector:@selector(results)];
+            for (id obs in results) {
+                NSArray *cands = ((NSArray *(*)(id, SEL, NSUInteger))objc_msgSend)(obs, @selector(topCandidates:), 1);
+                if (!cands.count) continue;
+                NSString *text = [cands[0] performSelector:@selector(string)];
+                if (!text.length || !containsSkipWordStrict(text)) continue;
+                CGRect bbox = [(NSValue *)[obs performSelector:@selector(boundingBox)] CGRectValue];
+                CGRect r = bboxToScreenRect(bbox, sz);
+                if (r.size.width < 8 || r.size.height < 8) continue;
+                if (r.size.width > sz.width * 0.6) continue;
+                CGPoint center = CGPointMake(CGRectGetMidX(r), CGRectGetMidY(r));
+                BOOL inTopStrip = (center.y < sz.height * 0.22);
+                BOOL inBottomStrip = (center.y > sz.height * 0.78);
+                BOOL inRightZone = (center.x > sz.width * 0.4);
+                if (!inRightZone && !inTopStrip && !inBottomStrip) continue;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (inAdWindow() && w) tapPointAtWindow(w, center);
+                });
+                break;
+            }
+        }];
+        [request setValue:@1 forKey:@"recognitionLevel"];
+        @try { [request setValue:@[@"zh-Hans", @"en-US"] forKey:@"recognitionLanguages"]; } @catch (NSException *e) {}
+        [request setValue:@YES forKey:@"usesLanguageCorrection"];
+        id handler = [[handlerCls alloc] initWithCGImage:shot.CGImage options:@{}];
+        NSError *reqErr = nil;
+        #pragma clang diagnostic push
+        #pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        [handler performSelector:@selector(performRequests:error:) withObject:@[request] withObject:(__bridge id)(void *)&reqErr];
+        #pragma clang diagnostic pop
     } @catch (NSException *e) {}
 }
 
-static UIView *findSkipViewInAccessibility(UIView *root) {
-    gAclFoundView = nil;
-    gAclFoundFrameValid = NO;
-    aclFindFirstMatch(root);
-    return gAclFoundView;
+// ============ 只读全窗搜索（轮询引擎的一轮） ============
+static UIView *searchSkipView(void) {
+    @try {
+        id app = [UIApplication performSelector:@selector(sharedApplication)];
+        if (!app) return nil;
+        NSArray *windows = [app performSelector:@selector(windows)];
+        if (!windows.count) return nil;
+        NSArray *sorted = [windows sortedArrayUsingComparator:^NSComparisonResult(id a, id b) {
+            CGFloat la = [a windowLevel], lb = [b windowLevel];
+            if (la > lb) return NSOrderedAscending;
+            if (la < lb) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+        for (UIWindow *win in sorted) {
+            if (!win || win.hidden || win.alpha < 0.05) continue;
+            CGRect b = win.bounds;
+            if (CGRectIsEmpty(b) || b.size.width < 200 || b.size.height < 200) continue;
+            UIView *hit = findSkipViewInHierarchy(win, 0);
+            if (hit) return hit;
+            CALayer *tl = findSkipTextLayerInLayer(win.layer, 0);
+            if (tl) {
+                CALayer *l = tl;
+                UIView *ownerView = nil;
+                Class viewCls = NSClassFromString(@"UIView");
+                for (int i = 0; i < 10 && l; i++) {
+                    id d = l.delegate;
+                    if (viewCls && [d isKindOfClass:viewCls]) { ownerView = (UIView *)d; break; }
+                    l = l.superlayer;
+                }
+                if (ownerView && ownerView.window) return ownerView;
+            }
+            UIView *byClass = findSkipViewByClassName(win);
+            if (byClass) return byClass;
+        }
+    } @catch (NSException *e) {}
+    return nil;
+}
+
+// ============ 轮询引擎（会话开始即启动；0.35s 间隔） ============
+static void startEngineTimer(void) {
+    if (gEngineTimer || !gSessionActive) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (gEngineTimer || !gSessionActive) return;
+        CFRunLoopTimerContext ctx = {0, NULL, NULL, NULL, NULL};
+        gEngineTimer = CFRunLoopTimerCreate(kCFAllocatorDefault,
+                                            CFAbsoluteTimeGetCurrent() + 0.35,
+                                            0.35, 0, 0, engineTimerCallback, &ctx);
+        if (gEngineTimer) CFRunLoopAddTimer(CFRunLoopGetMain(), gEngineTimer, kCFRunLoopCommonModes);
+    });
+}
+
+static void stopEngineTimer(void) {
+    if (gEngineTimer) {
+        CFRunLoopTimerInvalidate(gEngineTimer);
+        CFRelease(gEngineTimer);
+        gEngineTimer = NULL;
+    }
+}
+
+// 摇一摇广告的按钮跳过仍走正常通道（文字 hook / 采样 / 引擎兜底）。
+static BOOL isShakeAdView(UIView *v) {
+    if (!v) return NO;
+    NSString *low = NSStringFromClass([v class]).lowercaseString;
+    if (!low.length) return NO;
+    if ([low containsString:@"shakead"] || [low containsString:@"shake_ad"] || [low containsString:@"shakeview"]) return YES;
+    if ([low containsString:@"yaoyao"] || [low containsString:@"yao_yao"]) return YES;
+    return NO;
+}
+
+// 图像 close 搜索：容器确认后，在容器内找 角落 + ≤120pt + UIControl/带tap手势 的小控件。
+// 广告画面主体是 UIImageView（非控件），只有 close 是可点控件——结构天然区分。
+static UIView *findImageCloseButtonRec(UIView *v, int depth) {
+    if (!v || depth > 16 || v.hidden || v.alpha < 0.05) return nil;
+    CGFloat w = v.bounds.size.width, h = v.bounds.size.height;
+    if (w >= 20 && w <= 120 && h >= 20 && h <= 120) {
+        BOOL isControl = [v isKindOfClass:NSClassFromString(@"UIControl")];
+        BOOL hasTap = NO;
+        Class tapCls = NSClassFromString(@"UITapGestureRecognizer");
+        for (UIGestureRecognizer *g in v.gestureRecognizers) {
+            if (tapCls && [g isKindOfClass:tapCls]) { hasTap = YES; break; }
+        }
+        if ((isControl || hasTap) && plausibleCloseCorner(v)) return v;
+    }
+    for (UIView *sub in v.subviews) {
+        UIView *hit = findImageCloseButtonRec(sub, depth + 1);
+        if (hit) return hit;
+    }
+    return nil;
+}
+
+static UIView *findImageCloseButton(void) {
+    @try {
+        id app = [UIApplication performSelector:@selector(sharedApplication)];
+        if (!app) return nil;
+        NSArray *wins = [app performSelector:@selector(windows)];
+        for (UIWindow *win in wins) {
+            if (!win || win.hidden || win.alpha < 0.05) continue;
+            CGRect b = win.bounds;
+            if (CGRectIsEmpty(b) || b.size.width < 200 || b.size.height < 200) continue;
+            gFoundContainer = nil;
+            findSplashContainerRec(win, 0);
+            if (!gFoundContainer) continue;   // 只在确认的容器内找，绝不全局扫控件
+            UIView *hit = findImageCloseButtonRec(gFoundContainer, 0);
+            if (hit) return hit;
+        }
+    } @catch (NSException *e) {}
+    return nil;
+}
+
+// 引擎职责与 2.x 不同：事件驱动已负责"秒跳"，引擎只做三件事：
+//   ① 验证已点击目标（1 tick 后还在 → 重试，最多 3 次）
+//   ② 兜底搜索（文字/CALayer/类名/accessibility 四通道 + JS + OCR）
+//   ③ 自动收摊（连续 5 tick 无命中且已点过 → 会话目标完成，停引擎）
+static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
+    gTickCount++;
+    if (!inAdWindow()) {
+        stopEngineTimer();
+        return;
+    }
+    // ① 点击验证
+    if (gLastTappedView) {
+        BOOL stillVisible = (gLastTappedView.window != nil && !gLastTappedView.hidden && gLastTappedView.alpha >= 0.05);
+        if (!stillVisible) {
+            // 按钮消失 = 成功
+            gSkipFired = YES;
+            stopEngineTimer();
+            return;
+        }
+        // 倒计时按钮（SDK 内部拦截点击到倒计时结束）：重试上限放宽到 14 次
+        // （覆盖 10s 倒计时），文字每秒 setText 刷新会持续重触发，点到消失为止
+        int retryLimit = gCountdownTarget ? 14 : 3;
+        if (gTapRetry < retryLimit) {
+            gTapRetry++;
+            tapView(gLastTappedView);
+            return;
+        }
+        // 重试耗尽：放弃这个目标（不删不隐藏），继续靠 JS/OCR 找别的机会
+        gLastTappedView = nil;
+        gTapRetry = 0;
+        jsTapWebViews();
+        return;
+    }
+    // ② 兜底搜索
+    UIView *hit = searchSkipView();
+    if (hit) {
+        gIdleTicks = 0;
+        noteSignalAndArmEngine();
+        tapView(hit);
+        gLastTappedView = hit;
+        gTapRetry = 0;
+        return;
+    }
+    if (tapSkipInAccessibility()) return;
+    jsTapWebViews();
+    runOCROnMain();
+    // ②b 容器已确认但找不到任何带字按钮 → 扫角落图像 close（无文字广告）
+    if (gAdContainerSeen && !gLastTappedView) {
+        UIView *iconClose = findImageCloseButton();
+        if (iconClose && iconClose.window && !iconClose.hidden && iconClose.alpha >= 0.05) {
+            gIdleTicks = 0;
+            tapView(iconClose);
+            gLastTappedView = iconClose;
+            gTapRetry = 0;
+        }
+    }
+    // 不再因为前 3~5 秒没有发现文字按钮就关闭引擎。
+    // 许多开屏广告先展示图片/视频，随后才创建关闭控件；会话本身由
+    // inAdWindow 的时间窗负责收尾。这样“无文字信号”的广告也能持续被扫描。
+}
+
+// ============ hook（全部严格门控，热路径第一行就是 inAdWindow 便宜判断） ============
+%hook UILabel
+- (void)setText:(NSString *)text {
+    %orig;
+    if (!inAdWindow()) return;
+    if (!text.length) return;
+    if (containsSkipWordStrict(text) || containsCountdownSkipWord(text)) {
+        handleEventDrivenSkip(self);
+        return;
+    }
+    // 二级「关闭」：必须容器先确认（防主界面弹窗/正常 UI 误触）
+    if (containsCloseWord(text) && gateCloseTap(self)) {
+        handleEventDrivenSkip(self);
+    }
+}
+- (void)setAttributedText:(NSAttributedString *)text {
+    %orig;
+    if (!inAdWindow() || !text.string.length) return;
+    if (containsSkipWordStrict(text.string) || containsCountdownSkipWord(text.string)) {
+        handleEventDrivenSkip(self);
+        return;
+    }
+    if (containsCloseWord(text.string) && gateCloseTap(self)) {
+        handleEventDrivenSkip(self);
+    }
+}
+%end
+
+%hook UIButton
+- (void)setTitle:(NSString *)title forState:(UIControlState)state {
+    %orig;
+    if (!inAdWindow() || !title.length) return;
+    if (containsSkipWordStrict(title) || containsCountdownSkipWord(title)) {
+        handleEventDrivenSkip(self);
+        return;
+    }
+    if (containsCloseWord(title) && gateCloseTap(self)) {
+        handleEventDrivenSkip(self);
+    }
+}
+%end
+
+%hook UIView
+- (void)didMoveToWindow {
+    %orig;
+    if (!inAdWindow()) return;
+    if (!self.window) return;
+    if (isSkipButtonClass(self)) {
+        handleEventDrivenSkipByClass(self);
+        return;
+    }
+    if (isSplashAdClass(self)) {
+        // 全屏校验：非全屏的广告位组件（如信息流广告卡片）绝不开锁
+        if (isFullscreenish(self)) {
+            gAdContainerSeen = YES;   // 容器确认：开锁「关闭」词表 + 图像✕ + 防摇
+            handleEventDrivenSplashContainer(self);
+        }
+        return;
+    }
+    if (isShakeAdView(self)) {
+        gAdContainerSeen = YES;   // 摇一摇触发视图：仅开锁（防摇+关字+图像✕），不触发点击
+        noteSignalAndArmEngine(); // 武装引擎等按钮出现
+    }
+}
+%end
+
+// 摇一摇广告的跳转触发器是加速度传感器，不是任何视图——点它反而触发跳转。
+// 正确解法：容器确认期间拒绝 SDK 拿到传感器数据，摇一摇"摇不响"。
+// 安全边界：gAdContainerSeen 为 NO 时（无广告/非广告容器），%orig 原样放行，
+// 传感器行为分毫不变；容器确认本身必须过类名词根（isSplashAdClass）才置位。
+%hook CMMotionManager
+- (void)startAccelerometerUpdatesToQueue:(NSOperationQueue *)queue withHandler:(void (^)(CMAccelerometerData *, NSError *))handler {
+    if (gAdContainerSeen && inAdWindow()) return;   // 广告期：不启动，SDK 永远收不到数据
+    %orig;
+}
+- (void)startDeviceMotionUpdatesToQueue:(NSOperationQueue *)queue withHandler:(void (^)(CMDeviceMotion *, NSError *))handler {
+    if (gAdContainerSeen && inAdWindow()) return;
+    %orig;
+}
+- (void)startGyroUpdatesToQueue:(NSOperationQueue *)queue withHandler:(void (^)(CMGyroData *, NSError *))handler {
+    if (gAdContainerSeen && inAdWindow()) return;
+    %orig;
+}
+- (void)startAccelerometerUpdates {
+    if (gAdContainerSeen && inAdWindow()) return;
+    %orig;
+}
+- (void)startDeviceMotionUpdates {
+    if (gAdContainerSeen && inAdWindow()) return;
+    %orig;
+}
+%end
+
+// ============ 入口：始终安装会话监听，支持设置即时生效 ============
+%ctor {
+    @autoreleasepool {
+        NSString *processBundleID = [NSBundle mainBundle].bundleIdentifier ?: @"";
+        ADLOG(@"Loaded into %@", processBundleID);
+        loadUserConfig();
+        ADLOG(@"Injected into %@, enabled=%d, appState=%@", [NSBundle mainBundle].bundleIdentifier, !gUserDisabled, gEnabledApps);
+
+        // 不再因为启动时开关为 NO 而直接 return。旧逻辑一旦 return，
+        // Settings 里后来打开某个 App 的开关，已运行的 App 永远不会重新
+        // 建立会话，因此用户会感觉“开关不生效”。
+        gAdSkipDarwinCenter = CFNotificationCenterGetDarwinNotifyCenter();
+        CFNotificationCenterAddObserver(gAdSkipDarwinCenter,
+                                        NULL,
+                                        adSkipPreferencesChanged,
+                                        CFSTR("com.mg.adskip.preferences.changed"),
+                                        NULL,
+                                        CFNotificationSuspensionBehaviorDeliverImmediately);
+
+        NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+
+        [nc addObserverForName:UIApplicationDidFinishLaunchingNotification
+                        object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+            loadUserConfig();
+            if (adSkipEnabledForCurrentApp()) {
+                beginSession(YES);
+            } else {
+                endSession();
+            }
+        }];
+
+        [nc addObserverForName:UIApplicationWillEnterForegroundNotification
+                        object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+            loadUserConfig();
+            if (adSkipEnabledForCurrentApp()) {
+                beginSession(NO);
+            } else {
+                endSession();
+            }
+        }];
+
+        [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
+                        object:nil queue:[NSOperationQueue mainQueue]
+                    usingBlock:^(NSNotification *note) {
+            endSession();
+        }];
+
+        // If the process was injected after launch, honor the setting without
+        // requiring another lifecycle notification.
+        if (adSkipEnabledForCurrentApp()) {
+            beginSession(YES);
+        }
+    }
+}
+
+static void adSkipPreferencesChanged(CFNotificationCenterRef center,
+                                      void *observer,
+                                      CFStringRef name,
+                                      const void *object,
+                                      CFDictionaryRef userInfo)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        loadUserConfig();
+        BOOL enabled = adSkipEnabledForCurrentApp();
+        ADLOG(@"Preferences changed in %@ -> enabled=%d", [NSBundle mainBundle].bundleIdentifier, enabled);
+        if (enabled) {
+            beginSession(NO);
+        } else {
+            endSession();
+        }
+    });
 }
