@@ -8,6 +8,7 @@ ARCHS = arm64 arm64e
 AdSkip_FILES = Tweak.xm
 AdSkip_CFLAGS = -fobjc-arc
 AdSkip_CFLAGS += -Wno-module-import-in-extern-c -Wno-deprecated-declarations
+AdSkip_CFLAGS += -DADSKIP_LOG=1
 AdSkip_LDFLAGS = -framework UIKit -framework CoreGraphics -framework QuartzCore -framework Vision -framework IOKit
 
 BUNDLE_NAME = AdSkipPrefs

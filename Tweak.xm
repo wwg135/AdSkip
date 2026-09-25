@@ -50,11 +50,26 @@ static CFNotificationCenterRef gAdSkipDarwinCenter = NULL;
 static NSDictionary *loadAdSkipPreferences(void)
 {
     NSString *path = @"/var/mobile/Library/Preferences/com.mg.adskip.plist";
-    NSDictionary *config = [NSDictionary dictionaryWithContentsOfFile:path];
-    if ([config isKindOfClass:[NSDictionary class]]) {
-        return config;
+    NSDictionary *fileConfig = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSMutableDictionary *config = [fileConfig isKindOfClass:[NSDictionary class]]
+        ? [fileConfig mutableCopy]
+        : [NSMutableDictionary dictionary];
+
+    // Preferences can be cached by cfprefsd. Fall back to CFPreferences when
+    // the on-disk plist is stale or temporarily unavailable. The file remains
+    // the primary source so rootless/rootful installations behave identically.
+    CFPropertyListRef enabled = CFPreferencesCopyAppValue(CFSTR("Enabled"), CFSTR("com.mg.adskip"));
+    CFPropertyListRef apps = CFPreferencesCopyAppValue(CFSTR("Apps"), CFSTR("com.mg.adskip"));
+    if (enabled) {
+        config[@"Enabled"] = CFBridgingRelease(enabled);
     }
-    return @{};
+    if (apps) {
+        id value = CFBridgingRelease(apps);
+        if ([value isKindOfClass:[NSDictionary class]]) {
+            config[@"Apps"] = value;
+        }
+    }
+    return config;
 }
 
 static void loadUserConfig(void)
@@ -114,6 +129,7 @@ static BOOL adSkipEnabledForCurrentApp(void)
 }
 
 static void stopEngineTimer(void);
+static void startEngineTimer(void);
 
 static void adSkipPreferencesChanged(CFNotificationCenterRef center,
                                       void *observer,
@@ -137,6 +153,13 @@ static void beginSession(BOOL cold) {
     gCountdownTarget = NO;
     gLastOcrTime = 0;
     gOcrShots = 0;
+
+    // Do not wait for a UILabel/UIButton/ad-container hook to wake the engine.
+    // Some ads are rendered by WKWebView, Metal, CALayer or custom SwiftUI
+    // views and therefore produce no useful Objective-C text hook. Starting
+    // the short-lived polling engine at session start guarantees those apps
+    // still get a chance to be detected after injection.
+    startEngineTimer();
 }
 
 static void endSession(void) {
@@ -1320,6 +1343,7 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 %ctor {
     @autoreleasepool {
         loadUserConfig();
+        ADLOG(@"Injected into %@, enabled=%d, appState=%@", [NSBundle mainBundle].bundleIdentifier, !gUserDisabled, gEnabledApps);
 
         // 不再因为启动时开关为 NO 而直接 return。旧逻辑一旦 return，
         // Settings 里后来打开某个 App 的开关，已运行的 App 永远不会重新
@@ -1378,7 +1402,9 @@ static void adSkipPreferencesChanged(CFNotificationCenterRef center,
 {
     dispatch_async(dispatch_get_main_queue(), ^{
         loadUserConfig();
-        if (adSkipEnabledForCurrentApp()) {
+        BOOL enabled = adSkipEnabledForCurrentApp();
+        ADLOG(@"Preferences changed in %@ -> enabled=%d", [NSBundle mainBundle].bundleIdentifier, enabled);
+        if (enabled) {
             beginSession(NO);
         } else {
             endSession();
