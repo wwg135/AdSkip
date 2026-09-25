@@ -1,4 +1,5 @@
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 #import "AppScanner.h"
 
 @implementation ADSkipApp
@@ -98,6 +99,130 @@
     }
 
     return fallback;
+}
+
+
+#pragma mark - LaunchServices fallback
+
++ (id)launchServicesProxyForBundleID:(NSString *)bundleID
+{
+    if (bundleID.length == 0) return nil;
+
+    Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+    SEL selector = NSSelectorFromString(@"applicationProxyForIdentifier:");
+    if (!proxyClass || ![proxyClass respondsToSelector:selector]) return nil;
+
+    @try {
+        id (*send)(id, SEL, id) = (id (*)(id, SEL, id))objc_msgSend;
+        return send(proxyClass, selector, bundleID);
+    } @catch (NSException *exception) {
+        return nil;
+    }
+}
+
++ (NSString *)launchServicesLocalizedNameForBundleID:(NSString *)bundleID
+                                            fallback:(NSString *)fallback
+{
+    id proxy = [self launchServicesProxyForBundleID:bundleID];
+    if (!proxy) return fallback;
+
+    @try {
+        SEL selector = NSSelectorFromString(@"localizedName");
+        if ([proxy respondsToSelector:selector]) {
+            NSString *name = ((id (*)(id, SEL))objc_msgSend)(proxy, selector);
+            if ([name isKindOfClass:[NSString class]] && name.length > 0) {
+                return name;
+            }
+        }
+    } @catch (NSException *exception) {
+    }
+    return fallback;
+}
+
++ (UIImage *)launchServicesIconForBundleID:(NSString *)bundleID
+{
+    id proxy = [self launchServicesProxyForBundleID:bundleID];
+    if (!proxy) return nil;
+
+    SEL selector = NSSelectorFromString(@"iconDataForVariant:");
+    if (![proxy respondsToSelector:selector]) return nil;
+
+    // Variant 2 is commonly used for the normal iPhone icon. Try a few
+    // variants because different iOS releases / icon caches expose different
+    // variant IDs.
+    for (NSNumber *variant in @[@2, @1, @0, @3]) {
+        @try {
+            id (*send)(id, SEL, int) = (id (*)(id, SEL, int))objc_msgSend;
+            id value = send(proxy, selector, variant.intValue);
+            if ([value isKindOfClass:[UIImage class]]) {
+                return value;
+            }
+            if (![value isKindOfClass:[NSData class]]) continue;
+
+            NSData *data = (NSData *)value;
+            UIImage *image = [UIImage imageWithData:data scale:[UIScreen mainScreen].scale];
+            if (image) return image;
+
+            // Older LaunchServices builds can return a small header followed by
+            // raw 32-bit BGRA pixels. Decode only when the header contains sane
+            // dimensions; never assume a fixed 87x87 size.
+            if (data.length > 32) {
+                const uint8_t *bytes = data.bytes;
+                uint32_t width = 0, height = 0;
+                memcpy(&width, bytes + 8, sizeof(width));
+                memcpy(&height, bytes + 12, sizeof(height));
+                if (width > 8 && width <= 1024 && height > 8 && height <= 1024 &&
+                    (NSUInteger)width * (NSUInteger)height * 4 <= data.length - 32) {
+                    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+                    CGContextRef ctx = CGBitmapContextCreate(NULL,
+                                                              width,
+                                                              height,
+                                                              8,
+                                                              width * 4,
+                                                              colorSpace,
+                                                              kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
+                    if (ctx) {
+                        void *dst = CGBitmapContextGetData(ctx);
+                        memcpy(dst, bytes + 32, (size_t)width * (size_t)height * 4);
+                        CGImageRef cg = CGBitmapContextCreateImage(ctx);
+                        CGContextRelease(ctx);
+                        CGColorSpaceRelease(colorSpace);
+                        if (cg) {
+                            UIImage *image = [UIImage imageWithCGImage:cg
+                                                                  scale:[UIScreen mainScreen].scale
+                                                            orientation:UIImageOrientationUp];
+                            CGImageRelease(cg);
+                            if (image) return image;
+                        }
+                    } else {
+                        CGColorSpaceRelease(colorSpace);
+                    }
+                }
+            }
+        } @catch (NSException *exception) {
+        }
+    }
+    return nil;
+}
+
++ (UIImage *)normalizedIcon:(UIImage *)image
+{
+    if (!image) return nil;
+
+    // Preferences cells are laid out in points. Normalize both the pixel
+    // dimensions and the UIImage scale so a 120/180px source cannot make the
+    // neighboring rows overlap.
+    CGSize target = CGSizeMake(29.0, 29.0);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+    format.scale = UIScreen.mainScreen.scale;
+    format.opaque = NO;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:target format:format];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGRect rect = CGRectMake(0, 0, target.width, target.height);
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:6.0];
+        [path addClip];
+        [image drawInRect:rect];
+    }];
 }
 
 #pragma mark - Icon discovery
@@ -205,19 +330,7 @@
         return nil;
     }
 
-    // Normalize every icon to the actual Preferences row footprint. This is
-    // important because PSSwitchCell may otherwise use the source pixel size.
-    CGSize target = CGSizeMake(29.0, 29.0);
-    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
-    format.scale = UIScreen.mainScreen.scale;
-    format.opaque = NO;
-    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:target format:format];
-    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        CGRect rect = CGRectMake(0, 0, target.width, target.height);
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:6.0];
-        [path addClip];
-        [image drawInRect:rect];
-    }];
+    return [self normalizedIcon:image];
 }
 
 #pragma mark - App scanning
@@ -261,12 +374,25 @@
         displayName = bundleID;
     }
 
+    // LaunchServices is the same system registry iOS uses for the installed
+    // app name. Prefer it over hand-parsing InfoPlist.strings: this fixes apps
+    // whose localization is compiled/packaged in a way that NSBundle cannot
+    // resolve correctly from Settings.
+    NSString *lsName = [self launchServicesLocalizedNameForBundleID:bundleID fallback:nil];
+    if (lsName.length > 0) {
+        displayName = lsName;
+    }
+
     ADSkipApp *app = [ADSkipApp new];
     app.bundleID = bundleID;
     app.displayName = displayName;
     app.type = type;
     app.iconPath = [self iconPathForInfo:info appPath:appPath];
-    app.iconImage = [self loadIconForAppPath:appPath iconPath:app.iconPath info:info];
+    UIImage *icon = [self loadIconForAppPath:appPath iconPath:app.iconPath info:info];
+    if (!icon) {
+        icon = [self launchServicesIconForBundleID:bundleID];
+    }
+    app.iconImage = [self normalizedIcon:icon];
 
     result[bundleID] = app;
 }
