@@ -11,6 +11,7 @@ static NSString * const kPreferencesPath =
 static NSString * const kEnabledKey = @"Enabled";
 static NSString * const kAppsKey = @"Apps";
 static NSString * const kCategoryKey = @"AppCategory";
+static NSString * const kAppCachePath = @"/var/mobile/Library/Preferences/com.mg.adskip.appcache.plist";
 
 @interface AdSkipRootListController : PSListController
 
@@ -30,9 +31,59 @@ static NSString * const kCategoryKey = @"AppCategory";
         if (_selectedCategory < 0 || _selectedCategory > 2) {
             _selectedCategory = 0;
         }
-        _allApps = @[];
+        _allApps = [self loadCachedApplications];
     }
     return self;
+}
+
+- (NSArray<ADSkipApp *> *)loadCachedApplications
+{
+    NSDictionary *root = [NSDictionary dictionaryWithContentsOfFile:kAppCachePath];
+    NSArray *items = [root[@"apps"] isKindOfClass:[NSArray class]] ? root[@"apps"] : nil;
+    if (items.count == 0) {
+        return @[];
+    }
+
+    NSMutableArray *apps = [NSMutableArray arrayWithCapacity:items.count];
+    for (NSDictionary *item in items) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSString *bundleID = item[@"bundleID"];
+        if (![bundleID isKindOfClass:[NSString class]] || bundleID.length == 0) continue;
+
+        ADSkipApp *app = [ADSkipApp new];
+        app.bundleID = bundleID;
+        app.displayName = [item[@"displayName"] isKindOfClass:[NSString class]] ? item[@"displayName"] : bundleID;
+        app.type = [item[@"type"] isKindOfClass:[NSString class]] ? item[@"type"] : @"store";
+        app.iconPath = [item[@"iconPath"] isKindOfClass:[NSString class]] ? item[@"iconPath"] : nil;
+
+        NSData *iconData = [item[@"iconPNG"] isKindOfClass:[NSData class]] ? item[@"iconPNG"] : nil;
+        if (iconData.length > 0) {
+            app.iconImage = [UIImage imageWithData:iconData scale:[UIScreen mainScreen].scale];
+        }
+        [apps addObject:app];
+    }
+
+    return apps;
+}
+
+- (void)saveApplicationCache:(NSArray<ADSkipApp *> *)apps
+{
+    NSMutableArray *items = [NSMutableArray arrayWithCapacity:apps.count];
+    for (ADSkipApp *app in apps) {
+        if (app.bundleID.length == 0) continue;
+        NSMutableDictionary *item = [NSMutableDictionary dictionary];
+        item[@"bundleID"] = app.bundleID;
+        item[@"displayName"] = app.displayName ?: app.bundleID;
+        item[@"type"] = app.type ?: @"store";
+        if (app.iconPath.length) item[@"iconPath"] = app.iconPath;
+        if (app.iconImage) {
+            NSData *png = UIImagePNGRepresentation(app.iconImage);
+            if (png.length) item[@"iconPNG"] = png;
+        }
+        [items addObject:item];
+    }
+    NSDictionary *root = @{ @"version": @1, @"apps": items };
+    [root writeToFile:kAppCachePath atomically:YES];
 }
 
 - (void)viewDidLoad
@@ -64,16 +115,20 @@ static NSString * const kCategoryKey = @"AppCategory";
 - (void)startApplicationScanIfNeeded
 {
     static BOOL scanning = NO;
-    if (scanning || self.allApps.count > 0) {
+    if (scanning) {
         return;
     }
 
+    // Cached applications are used immediately to make the controller open
+    // without waiting. Always refresh in the background so newly installed or
+    // removed apps appear on the next refresh without blocking Settings.
     scanning = YES;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSArray<ADSkipApp *> *apps = [AppScanner scanApplications];
         dispatch_async(dispatch_get_main_queue(), ^{
             scanning = NO;
             self.allApps = apps ?: @[];
+            [self saveApplicationCache:self.allApps];
             _specifiers = nil;
             [self reloadSpecifiers];
         });
