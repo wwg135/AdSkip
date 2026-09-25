@@ -1442,21 +1442,3 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
         }];
     }
 }
-
-static void adSkipPreferencesChanged(CFNotificationCenterRef center,
-                                      void *observer,
-                                      CFStringRef name,
-                                      const void *object,
-                                      CFDictionaryRef userInfo)
-{
-    dispatch_async(dispatch_get_main_queue(), ^{
-        loadUserConfig();
-        BOOL enabled = adSkipEnabledForCurrentApp();
-        ADLOG(@"Preferences changed in %@ -> enabled=%d", [NSBundle mainBundle].bundleIdentifier, enabled);
-        if (enabled) {
-            beginSession(NO);
-        } else {
-            endSession();
-        }
-    });
-}
