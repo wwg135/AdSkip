@@ -8,45 +8,84 @@
 
 #pragma mark - Localized display name
 
-+ (NSString *)localizedStringForKey:(NSString *)key inBundlePath:(NSString *)appPath fallback:(NSString *)fallback
++ (NSString *)localizedStringForKey:(NSString *)key
+                       inBundlePath:(NSString *)appPath
+                           fallback:(NSString *)fallback
 {
     if (![key isKindOfClass:[NSString class]] || key.length == 0) {
         return fallback;
     }
 
-    // First let NSBundle resolve the normal InfoPlist.strings localization rules.
     NSBundle *bundle = [NSBundle bundleWithPath:appPath];
-    NSString *localized = [bundle localizedInfoDictionary][key];
-    if ([localized isKindOfClass:[NSString class]] && localized.length > 0) {
-        return localized;
+    if (bundle) {
+        // This is the canonical Foundation lookup for InfoPlist.strings.
+        NSString *localized = [bundle localizedStringForKey:key
+                                                      value:nil
+                                                      table:@"InfoPlist"];
+        if ([localized isKindOfClass:[NSString class]] && localized.length > 0 &&
+            ![localized isEqualToString:key]) {
+            return localized;
+        }
+
+        localized = [bundle localizedInfoDictionary][key];
+        if ([localized isKindOfClass:[NSString class]] && localized.length > 0) {
+            return localized;
+        }
     }
 
-    localized = [bundle objectForInfoDictionaryKey:key];
-    if ([localized isKindOfClass:[NSString class]] && localized.length > 0) {
-        return localized;
+    // Some apps do not expose InfoPlist.strings through NSBundle when their
+    // bundle is scanned outside the app process. Read the lproj files directly
+    // and rank them according to the user's preferred languages.
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray<NSString *> *dirs = [fm contentsOfDirectoryAtPath:appPath error:nil];
+    NSMutableArray<NSString *> *languages = [NSMutableArray array];
+
+    for (NSString *language in [NSLocale preferredLanguages]) {
+        if (language.length == 0) continue;
+        [languages addObject:language];
+
+        NSString *dashBase = [language componentsSeparatedByString:@"-"].firstObject;
+        if (dashBase.length > 0 && ![languages containsObject:dashBase]) {
+            [languages addObject:dashBase];
+        }
+
+        NSString *underscore = [language stringByReplacingOccurrencesOfString:@"-" withString:@"_"];
+        if (underscore.length > 0 && ![languages containsObject:underscore]) {
+            [languages addObject:underscore];
+        }
     }
 
-    // Some system/app bundles expose InfoPlist.strings only through their lproj
-    // directory. Resolve the current preferred language explicitly as a fallback.
-    NSArray<NSString *> *languages = [NSLocale preferredLanguages];
-    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
-    for (NSString *language in languages) {
-        if (language.length > 0) {
-            [candidates addObject:language];
-            NSString *base = [language componentsSeparatedByString:@"-"].firstObject;
-            if (base.length > 0 && ![candidates containsObject:base]) {
-                [candidates addObject:base];
+    // Chinese variants commonly found in iOS bundles.
+    NSArray *zhVariants = @[
+        @"zh-Hans", @"zh-Hans-CN", @"zh_CN", @"zh-CN", @"zh-Hant",
+        @"zh-Hant-TW", @"zh_TW", @"zh-TW", @"zh"
+    ];
+    for (NSString *variant in zhVariants) {
+        if (![languages containsObject:variant]) {
+            [languages addObject:variant];
+        }
+    }
+
+    // Finally append every actual lproj directory, so a valid localization is
+    // still found even when the app uses a nonstandard locale identifier.
+    NSMutableArray<NSString *> *lprojNames = [NSMutableArray array];
+    for (NSString *dir in dirs) {
+        if ([dir hasSuffix:@".lproj"]) {
+            NSString *name = [dir stringByDeletingPathExtension];
+            if (name.length > 0 && ![lprojNames containsObject:name]) {
+                [lprojNames addObject:name];
             }
         }
     }
-    if (![candidates containsObject:@"en"]) {
-        [candidates addObject:@"en"];
+    for (NSString *name in lprojNames) {
+        if (![languages containsObject:name]) {
+            [languages addObject:name];
+        }
     }
 
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *language in candidates) {
+    for (NSString *language in languages) {
         NSString *stringsPath = [appPath stringByAppendingPathComponent:
-                                 [NSString stringWithFormat:@"%@.lproj/InfoPlist.strings", language]];
+                                  [NSString stringWithFormat:@"%@.lproj/InfoPlist.strings", language]];
         if (![fm fileExistsAtPath:stringsPath]) {
             continue;
         }
@@ -71,27 +110,24 @@
     NSDictionary *primary = icons[@"CFBundlePrimaryIcon"];
     NSArray *primaryFiles = primary[@"CFBundleIconFiles"];
     if ([primaryFiles isKindOfClass:[NSArray class]]) {
-        [names addObjectsFromArray:primaryFiles];
+        for (NSString *name in primaryFiles) {
+            if ([name isKindOfClass:[NSString class]] && name.length > 0 && ![names containsObject:name]) {
+                [names addObject:name];
+            }
+        }
     }
 
     NSArray *legacyFiles = info[@"CFBundleIconFiles"];
     if ([legacyFiles isKindOfClass:[NSArray class]]) {
         for (NSString *name in legacyFiles) {
-            if ([name isKindOfClass:[NSString class]] && ![names containsObject:name]) {
+            if ([name isKindOfClass:[NSString class]] && name.length > 0 && ![names containsObject:name]) {
                 [names addObject:name];
             }
         }
     }
 
     NSArray *fallbacks = @[
-        @"AppIcon60x60",
-        @"AppIcon60x60@2x",
-        @"AppIcon60x60@3x",
-        @"AppIcon29x29",
-        @"AppIcon29x29@2x",
-        @"AppIcon29x29@3x",
-        @"icon",
-        @"Icon"
+        @"AppIcon60x60", @"AppIcon", @"AppIcon-60x60", @"icon", @"Icon"
     ];
     for (NSString *name in fallbacks) {
         if (![names containsObject:name]) {
@@ -100,7 +136,10 @@
     }
 
     NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *rawName in names.reverseObjectEnumerator) {
+    // Try the bundle-declared names in their original order first. Do not use
+    // reverseObjectEnumerator: it often picked @3x assets and made the cell
+    // render a huge bitmap.
+    for (NSString *rawName in names) {
         if (![rawName isKindOfClass:[NSString class]] || rawName.length == 0) {
             continue;
         }
@@ -122,6 +161,63 @@
     }
 
     return nil;
+}
+
++ (UIImage *)loadIconForAppPath:(NSString *)appPath
+                       iconPath:(NSString *)iconPath
+                           info:(NSDictionary *)info
+{
+    NSBundle *bundle = [NSBundle bundleWithPath:appPath];
+    UIImage *image = nil;
+
+    // imageNamed:inBundle: can resolve asset-catalog based app icons that do
+    // not exist as a standalone PNG next to Info.plist.
+    NSMutableArray<NSString *> *names = [NSMutableArray array];
+    NSDictionary *primary = [info[@"CFBundleIcons"] isKindOfClass:[NSDictionary class]]
+        ? info[@"CFBundleIcons"][@"CFBundlePrimaryIcon"] : nil;
+    NSArray *files = [primary isKindOfClass:[NSDictionary class]] ? primary[@"CFBundleIconFiles"] : nil;
+    if ([files isKindOfClass:[NSArray class]]) {
+        [names addObjectsFromArray:files];
+    }
+    NSArray *legacy = info[@"CFBundleIconFiles"];
+    if ([legacy isKindOfClass:[NSArray class]]) {
+        for (NSString *name in legacy) {
+            if ([name isKindOfClass:[NSString class]] && ![names containsObject:name]) {
+                [names addObject:name];
+            }
+        }
+    }
+    [names addObjectsFromArray:@[@"AppIcon60x60", @"AppIcon", @"icon", @"Icon"]];
+
+    if (bundle) {
+        for (NSString *name in names) {
+            if (![name isKindOfClass:[NSString class]] || name.length == 0) continue;
+            image = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
+            if (image) break;
+        }
+    }
+
+    if (!image && iconPath.length > 0) {
+        image = [UIImage imageWithContentsOfFile:iconPath];
+    }
+
+    if (!image) {
+        return nil;
+    }
+
+    // Normalize every icon to the actual Preferences row footprint. This is
+    // important because PSSwitchCell may otherwise use the source pixel size.
+    CGSize target = CGSizeMake(29.0, 29.0);
+    UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+    format.scale = UIScreen.mainScreen.scale;
+    format.opaque = NO;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:target format:format];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGRect rect = CGRectMake(0, 0, target.width, target.height);
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:rect cornerRadius:6.0];
+        [path addClip];
+        [image drawInRect:rect];
+    }];
 }
 
 #pragma mark - App scanning
@@ -156,7 +252,7 @@
     NSString *displayName = [self localizedStringForKey:@"CFBundleDisplayName"
                                            inBundlePath:appPath
                                                fallback:fallbackName];
-    if (displayName.length == 0 || [displayName isEqualToString:fallbackName]) {
+    if (displayName.length == 0 || [displayName isEqualToString:@"CFBundleDisplayName"]) {
         displayName = [self localizedStringForKey:@"CFBundleName"
                                        inBundlePath:appPath
                                            fallback:fallbackName];
@@ -169,11 +265,8 @@
     app.bundleID = bundleID;
     app.displayName = displayName;
     app.type = type;
-
     app.iconPath = [self iconPathForInfo:info appPath:appPath];
-    if (app.iconPath.length > 0) {
-        app.iconImage = [UIImage imageWithContentsOfFile:app.iconPath];
-    }
+    app.iconImage = [self loadIconForAppPath:appPath iconPath:app.iconPath info:info];
 
     result[bundleID] = app;
 }
@@ -203,15 +296,13 @@
     NSMutableDictionary<NSString *, ADSkipApp *> *result = [NSMutableDictionary dictionary];
     NSFileManager *fm = [NSFileManager defaultManager];
 
-    // User-installed applications. This is deliberately the only source marked
-    // "store", so system applications cannot accidentally appear in that tab.
     NSArray<NSString *> *storeRoots = @[
         @"/var/containers/Bundle/Application",
         @"/private/var/containers/Bundle/Application"
     ];
 
     for (NSString *storeRoot in storeRoots) {
-        NSArray<NSString *> *uuids = [fm contentsOfDirectoryAtPath:storeRoot error:nil];
+        NSArray *uuids = [fm contentsOfDirectoryAtPath:storeRoot error:nil];
         for (NSString *uuid in uuids) {
             NSString *uuidPath = [storeRoot stringByAppendingPathComponent:uuid];
             BOOL isDir = NO;
@@ -222,8 +313,6 @@
         }
     }
 
-    // System applications. These locations are kept separate from the user-app
-    // scan above so the category switch remains deterministic.
     NSArray<NSString *> *systemRoots = @[
         @"/Applications",
         @"/System/Applications",

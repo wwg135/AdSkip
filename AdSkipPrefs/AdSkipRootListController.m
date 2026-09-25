@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/Preferences.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 #import "AppScanner.h"
 
@@ -39,9 +40,6 @@ static NSString * const kCategoryKey = @"AppCategory";
 
     self.navigationItem.title = @"广告跳过";
 
-    // The category selector is a real Preferences table section header rather
-    // than a separate Preference cell. This keeps it directly above the app
-    // rows and avoids the old "应用分类 >" secondary page.
     self.categoryControl = [[UISegmentedControl alloc] initWithItems:@[
         @"全部", @"商店", @"系统"
     ]];
@@ -49,7 +47,6 @@ static NSString * const kCategoryKey = @"AppCategory";
     [self.categoryControl addTarget:self
                              action:@selector(categoryChanged:)
                    forControlEvents:UIControlEventValueChanged];
-
     self.categoryControl.accessibilityLabel = @"应用分类";
 }
 
@@ -65,8 +62,6 @@ static NSString * const kCategoryKey = @"AppCategory";
 
 - (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section
 {
-    // Section 0 is the global switch section. Section 1 is the app-control
-    // section created by buildSpecifiers below.
     if (section != 1) {
         return nil;
     }
@@ -90,10 +85,9 @@ static NSString * const kCategoryKey = @"AppCategory";
 
 - (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section
 {
-    if (section == 1) {
-        return 50.0;
-    }
-    return [super tableView:tableView heightForHeaderInSection:section];
+    // Do not call an optional/private PSListController implementation here.
+    // Returning a fixed native-style height avoids selector/runtime issues.
+    return section == 1 ? 50.0 : 22.0;
 }
 
 #pragma mark - Specifiers
@@ -123,6 +117,9 @@ static NSString * const kCategoryKey = @"AppCategory";
 
 - (void)saveConfiguration:(NSDictionary *)configuration
 {
+    // Keep the plist file as the single source used by the tweak, while also
+    // updating CFPreferences so both PreferenceLoader and injected processes
+    // see the same values immediately.
     [configuration writeToFile:kPreferencesPath atomically:YES];
 
     CFPreferencesSetAppValue(CFSTR("Enabled"),
@@ -135,6 +132,15 @@ static NSString * const kCategoryKey = @"AppCategory";
                              (__bridge CFPropertyListRef)configuration[kAppsKey],
                              CFSTR("com.mg.adskip"));
     CFPreferencesAppSynchronize(CFSTR("com.mg.adskip"));
+
+    // Tell an already-running injected app that its per-app switch changed.
+    // The tweak listens on the Darwin notification center, so a relaunch is
+    // not required just to apply an enable/disable change.
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                          CFSTR("com.mg.adskip.preferences.changed"),
+                                          NULL,
+                                          NULL,
+                                          true);
 }
 
 - (NSMutableArray *)buildSpecifiers
@@ -145,7 +151,6 @@ static NSString * const kCategoryKey = @"AppCategory";
 
     NSMutableArray *specifiers = [NSMutableArray array];
 
-    // Section 0: global switch.
     PSSpecifier *header = [PSSpecifier groupSpecifierWithName:@"🛡️ 广告跳过"];
     [specifiers addObject:header];
 
@@ -159,10 +164,7 @@ static NSString * const kCategoryKey = @"AppCategory";
                                           edit:nil];
     [specifiers addObject:globalSwitch];
 
-    // Section 1: app controls. The UISegmentedControl is rendered as this
-    // section's native table header, immediately above the app rows.
-    PSSpecifier *appsGroup =
-        [PSSpecifier groupSpecifierWithName:@"应用控制"];
+    PSSpecifier *appsGroup = [PSSpecifier groupSpecifierWithName:@"应用控制"];
     [specifiers addObject:appsGroup];
 
     NSDictionary *appsState = [self configuration][kAppsKey];
@@ -180,15 +182,13 @@ static NSString * const kCategoryKey = @"AppCategory";
         [appSpecifier setProperty:app.bundleID forKey:@"bundleID"];
         [appSpecifier setProperty:app.type forKey:@"appType"];
         [appSpecifier setProperty:app.displayName forKey:@"appName"];
-        [appSpecifier setProperty:app.iconPath ?: @"" forKey:@"iconPath"];
+        [appSpecifier setProperty:(app.iconPath ?: @"") forKey:@"iconPath"];
 
-        // PreferenceLoader understands iconImage for a PSSwitchCell. Keep the
-        // path too for compatibility with versions that load icons themselves.
+        // Use a pre-scaled 29x29 image. Passing the original 120/180px PNG
+        // makes Preferences enlarge the image and causes adjacent rows to
+        // overlap, which is what the previous build showed.
         if (app.iconImage) {
             [appSpecifier setProperty:app.iconImage forKey:@"iconImage"];
-        }
-        if (app.iconPath.length > 0) {
-            [appSpecifier setProperty:app.iconPath forKey:@"icon"];
         }
 
         NSNumber *state = appsState[app.bundleID];
@@ -239,7 +239,6 @@ static NSString * const kCategoryKey = @"AppCategory";
     NSMutableDictionary *config = [self configuration];
     config[kEnabledKey] = @([value boolValue]);
     [self saveConfiguration:config];
-    [self reloadSpecifiers];
 }
 
 #pragma mark - Category
@@ -250,7 +249,6 @@ static NSString * const kCategoryKey = @"AppCategory";
     [[NSUserDefaults standardUserDefaults] setInteger:self.selectedCategory forKey:kCategoryKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
 
-    // Rebuild only the app section. The controller remains on the same page.
     _specifiers = nil;
     [self reloadSpecifiers];
 }
@@ -265,7 +263,8 @@ static NSString * const kCategoryKey = @"AppCategory";
     }
 
     NSDictionary *apps = [self configuration][kAppsKey];
-    return apps[bundleID] ?: @NO;
+    NSNumber *state = apps[bundleID];
+    return [state isKindOfClass:[NSNumber class]] ? state : @NO;
 }
 
 - (void)setAppEnabled:(NSNumber *)value specifier:(PSSpecifier *)specifier
@@ -285,8 +284,9 @@ static NSString * const kCategoryKey = @"AppCategory";
     config[kAppsKey] = apps;
     [self saveConfiguration:config];
 
-    // Do not rebuild the table after every app toggle; the native switch will
-    // remain in place and the value is already persisted immediately.
+    // No reload here. The switch has already changed visually and the value
+    // is persisted immediately; rebuilding the whole table used to make
+    // PreferenceLoader appear to lose the toggle.
 }
 
 #pragma mark - Reset
