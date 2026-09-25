@@ -80,7 +80,6 @@ static BOOL sScanInProgress = NO;
     }
 
     sScanInProgress = YES;
-    __weak AdSkipRootListController *weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSArray<ADSkipApp *> *apps = [AppScanner scanApplications] ?: @[];
 
@@ -88,19 +87,14 @@ static BOOL sScanInProgress = NO;
             sScanInProgress = NO;
             sCachedApps = [apps copy];
 
-            AdSkipRootListController *strongSelf = weakSelf;
-            if (!strongSelf) {
-                return;
-            }
-
-            strongSelf.allApps = sCachedApps;
+            self.allApps = sCachedApps;
 
             // If the controller is not currently visible, don't force a
             // Preferences table reload while it is being dismissed. The next
             // appearance will use sCachedApps immediately.
-            if (strongSelf.isViewLoaded && strongSelf.view.window != nil) {
-                strongSelf->_specifiers = nil;
-                [strongSelf reloadSpecifiers];
+            if (self.isViewLoaded && self.view.window != nil) {
+                self->_specifiers = nil;
+                [self reloadSpecifiers];
             }
         });
     });
