@@ -10,6 +10,55 @@ static NSString * const kAppsKey = @"Apps";
 static NSString * const kLegacyAppsKey = @"enabledApps";
 static NSString * const kCategoryKey = @"AppCategory";
 
+// The stock PSSwitchCell does not render arbitrary "iconImage" specifier
+// properties.  Use a switch cell subclass so every app row gets a real icon
+// view while retaining the native switch and preference-cell behavior.
+@interface ADSkipAppCell : PSSwitchCell
+@property(nonatomic, strong) UIImageView *appIconView;
+@end
+
+@implementation ADSkipAppCell
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier specifier:(PSSpecifier *)specifier {
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
+    if (self) {
+        _appIconView = [[UIImageView alloc] initWithFrame:CGRectZero];
+        _appIconView.tag = 1384576005;
+        _appIconView.contentMode = UIViewContentModeScaleAspectFit;
+        _appIconView.layer.cornerRadius = 6.0;
+        _appIconView.layer.masksToBounds = YES;
+        _appIconView.backgroundColor = [UIColor clearColor];
+        [self.contentView addSubview:_appIconView];
+        [self updateAppIconFromSpecifier:specifier];
+    }
+    return self;
+}
+
+- (void)updateAppIconFromSpecifier:(PSSpecifier *)specifier {
+    UIImage *icon = [specifier propertyForKey:@"iconImage"];
+    self.appIconView.image = [icon isKindOfClass:[UIImage class]] ? icon : nil;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGFloat side = 29.0;
+    CGFloat left = self.layoutMargins.left;
+    self.appIconView.frame = CGRectMake(left, (self.contentView.bounds.size.height - side) / 2.0, side, side);
+
+    // Leave room for the icon without disturbing the switch on the right.
+    UILabel *label = self.textLabel;
+    if (label) {
+        CGRect frame = label.frame;
+        CGFloat iconRight = CGRectGetMaxX(self.appIconView.frame) + 11.0;
+        if (frame.origin.x < iconRight) {
+            frame.origin.x = iconRight;
+            frame.size.width = MAX(0.0, CGRectGetMaxX(frame) - frame.origin.x);
+            label.frame = frame;
+        }
+    }
+}
+@end
+
 @interface AdSkipRootListController : PSListController
 @property(nonatomic, strong) NSArray<ADSkipApp *> *allApps;
 @property(nonatomic, assign) NSInteger selectedCategory;
@@ -147,6 +196,7 @@ static NSDate *sLastScanAt;
     for (ADSkipApp *app in [self filteredApps]) {
         [self hydrateIconForApp:app];
         PSSpecifier *s = [PSSpecifier preferenceSpecifierNamed:(app.displayName ?: app.bundleID) target:self set:@selector(setAppEnabled:specifier:) get:@selector(appEnabled:) detail:nil cell:PSSwitchCell edit:nil];
+        [s setProperty:NSStringFromClass([ADSkipAppCell class]) forKey:@"cellClass"];
         [s setProperty:app.bundleID forKey:@"bundleID"];
         [s setProperty:app.type forKey:@"appType"];
         [s setProperty:(app.iconPath ?: @"") forKey:@"iconPath"];
