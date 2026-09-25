@@ -1,6 +1,9 @@
-# AdSkip（跳过广告）
+# AdSkip
 
-Dopamine(rootless) 越狱 tweak：事件驱动秒跳开屏广告 + 设置面板（每 app 注入开关）。
-最低部署 iOS 15.0。
+RootHide-compatible iOS ad-skipping tweak.
 
-仅供学习使用。
+Round 20 changes:
+- Uses the same UIKit injection filter as the reference FLEXList tweak.
+- Restores the known-good Swiftgram naming behavior from the earlier build.
+- Caches the application list and icons so the Preferences page opens immediately.
+- Refreshes the application list asynchronously in the background.
