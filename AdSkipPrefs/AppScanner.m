@@ -374,15 +374,13 @@
         displayName = bundleID;
     }
 
-    // Do NOT blindly overwrite the bundle-localized name with LaunchServices.
-    // Some apps (including apps with a Chinese InfoPlist.strings) expose an
-    // English LS name even when the current UI language has a localized
-    // display name. LaunchServices is therefore only a fallback.
+    // Bundle metadata is authoritative for the Settings list. LaunchServices
+    // can return a cached/internal name that is not the user-facing app name
+    // (this was the source of the garbled Swiftgram entry in the recent build).
+    // Only fall back to the filesystem-derived name; do not replace a valid
+    // CFBundleDisplayName/InfoPlist.strings value with LS localizedName.
     if (displayName.length == 0 || [displayName isEqualToString:bundleID]) {
-        NSString *lsName = [self launchServicesLocalizedNameForBundleID:bundleID fallback:nil];
-        if (lsName.length > 0) {
-            displayName = lsName;
-        }
+        displayName = fallbackName.length ? fallbackName : bundleID;
     }
 
     ADSkipApp *app = [ADSkipApp new];

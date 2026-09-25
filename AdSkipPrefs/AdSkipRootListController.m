@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/Preferences.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <dispatch/dispatch.h>
 
 #import "AppScanner.h"
 
@@ -48,14 +49,35 @@ static NSString * const kCategoryKey = @"AppCategory";
                              action:@selector(categoryChanged:)
                    forControlEvents:UIControlEventValueChanged];
     self.categoryControl.accessibilityLabel = @"应用分类";
+
+    // Do not scan applications while Settings is opening. App discovery and
+    // icon decoding run on a utility queue instead of blocking the UI thread.
+    [self startApplicationScanIfNeeded];
 }
 
 - (void)viewWillAppear:(BOOL)animated
 {
     [super viewWillAppear:animated];
-    self.allApps = [AppScanner scanApplications];
-    _specifiers = nil;
-    [self reloadSpecifiers];
+    [self startApplicationScanIfNeeded];
+}
+
+- (void)startApplicationScanIfNeeded
+{
+    static BOOL scanning = NO;
+    if (scanning || self.allApps.count > 0) {
+        return;
+    }
+
+    scanning = YES;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSArray<ADSkipApp *> *apps = [AppScanner scanApplications];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            scanning = NO;
+            self.allApps = apps ?: @[];
+            _specifiers = nil;
+            [self reloadSpecifiers];
+        });
+    });
 }
 
 #pragma mark - Category header
@@ -145,10 +167,6 @@ static NSString * const kCategoryKey = @"AppCategory";
 
 - (NSMutableArray *)buildSpecifiers
 {
-    if (self.allApps.count == 0) {
-        self.allApps = [AppScanner scanApplications];
-    }
-
     NSMutableArray *specifiers = [NSMutableArray array];
 
     PSSpecifier *header = [PSSpecifier groupSpecifierWithName:@"🛡️ 广告跳过"];
