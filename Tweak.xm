@@ -81,6 +81,9 @@ static void loadUserConfig(void)
         gUserDisabled = enabled ? ![enabled boolValue] : NO;
 
         NSDictionary *apps = config[@"Apps"];
+        if (![apps isKindOfClass:[NSDictionary class]]) {
+            apps = config[@"enabledApps"];
+        }
         if ([apps isKindOfClass:[NSDictionary class]]) {
             gEnabledApps = [apps copy];
         } else {
@@ -180,7 +183,7 @@ static BOOL inAdWindow(void) {
     if (!gSessionActive || gSkipFired) return NO;
 
     NSTimeInterval e = nowTs() - gSessionStart;
-    return e >= 0 && e <= (gColdSession ? 15.0 : 8.0);
+    return e >= 0 && e <= (gColdSession ? 30.0 : 15.0);
 }
 
 // 一级「跳过」：正常 UI 里几乎不存在（新手引导除外），门控稍宽
@@ -769,14 +772,13 @@ static BOOL eventGatePass(UIView *v, CGFloat maxSide) {
     return YES;
 }
 
-// gSignalSeen 标记 + 引擎懒启动：首个信号才武装轮询引擎
+// gSignalSeen 仍用于记录是否观察到广告信号；引擎现在由 beginSession 直接启动
 static void startEngineTimer(void);
 static void engineTimerCallback(CFRunLoopTimerRef timer, void *info);
 static void noteSignalAndArmEngine(void) {
-    if (!gSignalSeen) {
-        gSignalSeen = YES;
-        startEngineTimer();
-    }
+    gSignalSeen = YES;
+    // beginSession 已经启动引擎；这里不再负责懒启动。
+    startEngineTimer();
 }
 
 static void handleEventDrivenSkip(UIView *v) {
@@ -1109,7 +1111,7 @@ static UIView *searchSkipView(void) {
     return nil;
 }
 
-// ============ 轮询引擎（懒启动：首个信号出现才创建；0.35s 间隔） ============
+// ============ 轮询引擎（会话开始即启动；0.35s 间隔） ============
 static void startEngineTimer(void) {
     if (gEngineTimer || !gSessionActive) return;
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -1236,14 +1238,9 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
             gTapRetry = 0;
         }
     }
-    // ③ 自动收摊：本会话从没见过任何可点目标，连续 8 tick（约 3s）纯空转 → 停引擎省电
-    if (!gLastTappedView) {
-        gIdleTicks++;
-        int idleLimit = gAdContainerSeen ? 14 : 8; // 容器确认=按钮可能延迟加载，多等约2s
-        if (gIdleTicks >= idleLimit && gSessionTaps == 0) {
-            stopEngineTimer(); // 会话还在（新信号仍会重新武装），引擎先撤
-        }
-    }
+    // 不再因为前 3~5 秒没有发现文字按钮就关闭引擎。
+    // 许多开屏广告先展示图片/视频，随后才创建关闭控件；会话本身由
+    // inAdWindow 的时间窗负责收尾。这样“无文字信号”的广告也能持续被扫描。
 }
 
 // ============ hook（全部严格门控，热路径第一行就是 inAdWindow 便宜判断） ============
@@ -1342,6 +1339,8 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 // ============ 入口：始终安装会话监听，支持设置即时生效 ============
 %ctor {
     @autoreleasepool {
+        NSString *processBundleID = [NSBundle mainBundle].bundleIdentifier ?: @"";
+        ADLOG(@"Loaded into %@", processBundleID);
         loadUserConfig();
         ADLOG(@"Injected into %@, enabled=%d, appState=%@", [NSBundle mainBundle].bundleIdentifier, !gUserDisabled, gEnabledApps);
 

@@ -4,9 +4,12 @@
 <dict>
 	<key>Filter</key>
 	<dict>
+		<!-- com.apple.Security is the documented compatibility target for the
+		     old "load in all processes" behavior. The tweak still self-gates
+		     by bundle ID and user settings at runtime. -->
 		<key>Bundles</key>
 		<array>
-			<string>com.apple.UIKit</string>
+			<string>com.apple.Security</string>
 		</array>
 	</dict>
 </dict>
