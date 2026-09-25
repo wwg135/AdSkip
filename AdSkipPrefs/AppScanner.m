@@ -183,7 +183,7 @@
                                                               kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
                     if (ctx) {
                         void *dst = CGBitmapContextGetData(ctx);
-                        memcpy(dst, bytes + 32, side * side * 4);
+                        memcpy(dst, data.bytes + 32, side * side * 4);
                         CGImageRef cg = CGBitmapContextCreateImage(ctx);
                         CGContextRelease(ctx);
                         CGColorSpaceRelease(colorSpace);
