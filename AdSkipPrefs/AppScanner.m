@@ -8,11 +8,90 @@
 
 @implementation AppScanner
 
++ (NSString *)appCachePath
+{
+    return @"/var/mobile/Library/Preferences/com.mg.adskip.appcache.plist";
+}
+
++ (NSArray<ADSkipApp *> *)loadCachedApplications
+{
+    NSDictionary *root = [NSDictionary dictionaryWithContentsOfFile:[self appCachePath]];
+    if (![root isKindOfClass:[NSDictionary class]]) {
+        return @[];
+    }
+
+    NSNumber *ts = root[@"timestamp"];
+    if (![ts isKindOfClass:[NSNumber class]]) {
+        return @[];
+    }
+    NSTimeInterval age = [[NSDate date] timeIntervalSince1970] - ts.doubleValue;
+    if (age > 3600.0) {
+        return @[];
+    }
+
+    NSArray *items = root[@"apps"];
+    if (![items isKindOfClass:[NSArray class]]) {
+        return @[];
+    }
+
+    NSMutableArray<ADSkipApp *> *apps = [NSMutableArray array];
+    for (NSDictionary *dict in items) {
+        if (![dict isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+        NSString *bundleID = dict[@"bundleID"];
+        NSString *displayName = dict[@"displayName"];
+        NSString *type = dict[@"type"];
+        if (![bundleID isKindOfClass:[NSString class]] || bundleID.length == 0) {
+            continue;
+        }
+
+        ADSkipApp *app = [ADSkipApp new];
+        app.bundleID = bundleID;
+        app.displayName = ([displayName isKindOfClass:[NSString class]] && displayName.length > 0)
+            ? displayName
+            : bundleID;
+        app.type = ([type isKindOfClass:[NSString class]] && type.length > 0) ? type : @"store";
+        app.iconPath = ([dict[@"iconPath"] isKindOfClass:[NSString class]]
+                        && ((NSString *)dict[@"iconPath"]).length > 0)
+            ? (NSString *)dict[@"iconPath"]
+            : nil;
+        [apps addObject:app];
+    }
+
+    return [apps copy];
+}
+
++ (void)saveCachedApplications:(NSArray<ADSkipApp *> *)apps
+{
+    NSMutableArray *items = [NSMutableArray array];
+    for (ADSkipApp *app in apps) {
+        if (!app || ![app.bundleID isKindOfClass:[NSString class]] || app.bundleID.length == 0) {
+            continue;
+        }
+        if (![app.type isKindOfClass:[NSString class]] || app.type.length == 0) {
+            app.type = @"store";
+        }
+        [items addObject:@{
+            @"bundleID": app.bundleID ?: @"",
+            @"displayName": app.displayName ?: app.bundleID ?: @"",
+            @"type": app.type ?: @"store",
+            @"iconPath": app.iconPath ?: @""
+        }];
+    }
+
+    NSDictionary *root = @{
+        @"timestamp": @([[NSDate date] timeIntervalSince1970]),
+        @"apps": items
+    };
+    [root writeToFile:[self appCachePath] atomically:YES];
+}
+
 #pragma mark - Localized display name
 
 + (NSString *)localizedStringForKey:(NSString *)key
-                       inBundlePath:(NSString *)appPath
-                           fallback:(NSString *)fallback
+                        inBundlePath:(NSString *)appPath
+                            fallback:(NSString *)fallback
 {
     if (![key isKindOfClass:[NSString class]] || key.length == 0) {
         return fallback;
@@ -122,7 +201,7 @@
 }
 
 + (NSString *)launchServicesLocalizedNameForBundleID:(NSString *)bundleID
-                                            fallback:(NSString *)fallback
+                                             fallback:(NSString *)fallback
 {
     id proxy = [self launchServicesProxyForBundleID:bundleID];
     if (!proxy) return fallback;
@@ -289,8 +368,8 @@
 }
 
 + (UIImage *)loadIconForAppPath:(NSString *)appPath
-                       iconPath:(NSString *)iconPath
-                           info:(NSDictionary *)info
+                        iconPath:(NSString *)iconPath
+                            info:(NSDictionary *)info
 {
     NSBundle *bundle = [NSBundle bundleWithPath:appPath];
     UIImage *image = nil;
@@ -336,8 +415,8 @@
 #pragma mark - App scanning
 
 + (void)addApplicationAtPath:(NSString *)appPath
-                         type:(NSString *)type
-                       result:(NSMutableDictionary<NSString *, ADSkipApp *> *)result
+                          type:(NSString *)type
+                        result:(NSMutableDictionary<NSString *, ADSkipApp *> *)result
 {
     NSString *infoPath = [appPath stringByAppendingPathComponent:@"Info.plist"];
     NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
@@ -363,12 +442,12 @@
     }
 
     NSString *displayName = [self localizedStringForKey:@"CFBundleDisplayName"
-                                           inBundlePath:appPath
-                                               fallback:fallbackName];
+                                            inBundlePath:appPath
+                                                fallback:fallbackName];
     if (displayName.length == 0 || [displayName isEqualToString:@"CFBundleDisplayName"]) {
         displayName = [self localizedStringForKey:@"CFBundleName"
-                                       inBundlePath:appPath
-                                           fallback:fallbackName];
+                                        inBundlePath:appPath
+                                            fallback:fallbackName];
     }
     if (displayName.length == 0) {
         displayName = bundleID;
@@ -405,8 +484,8 @@
 }
 
 + (void)scanDirectAppsInDirectory:(NSString *)directory
-                              type:(NSString *)type
-                            result:(NSMutableDictionary<NSString *, ADSkipApp *> *)result
+                               type:(NSString *)type
+                             result:(NSMutableDictionary<NSString *, ADSkipApp *> *)result
 {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSArray<NSString *> *items = [fm contentsOfDirectoryAtPath:directory error:nil];
@@ -426,6 +505,11 @@
 
 + (NSArray<ADSkipApp *> *)scanApplications
 {
+    NSArray<ADSkipApp *> *cached = [self loadCachedApplications];
+    if (cached.count > 0) {
+        return cached;
+    }
+
     NSMutableDictionary<NSString *, ADSkipApp *> *result = [NSMutableDictionary dictionary];
     NSFileManager *fm = [NSFileManager defaultManager];
 
@@ -456,13 +540,16 @@
         [self scanDirectAppsInDirectory:root type:@"system" result:result];
     }
 
-    return [result.allValues sortedArrayUsingComparator:^NSComparisonResult(ADSkipApp *a, ADSkipApp *b) {
+    NSArray<ADSkipApp *> *sorted = [result.allValues sortedArrayUsingComparator:^NSComparisonResult(ADSkipApp *a, ADSkipApp *b) {
         NSComparisonResult order = [a.displayName localizedCaseInsensitiveCompare:b.displayName];
         if (order == NSOrderedSame) {
             return [a.bundleID compare:b.bundleID];
         }
         return order;
     }];
+
+    [self saveCachedApplications:sorted];
+    return sorted;
 }
 
 @end
