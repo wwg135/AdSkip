@@ -9,7 +9,6 @@ static NSString * const kEnabledKey = @"Enabled";
 static NSString * const kAppsKey = @"Apps";
 static NSString * const kLegacyAppsKey = @"enabledApps";
 static NSString * const kCategoryKey = @"AppCategory";
-static NSString * const kChangedNotification = @"com.mg.adskip.preferences.changed";
 
 @interface AdSkipRootListController : PSListController
 @property(nonatomic, strong) NSArray<ADSkipApp *> *allApps;
