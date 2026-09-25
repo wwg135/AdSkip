@@ -45,6 +45,7 @@ static BOOL isKeyboardProcess(void) {
 static BOOL gUserDisabled = NO;
 static NSDictionary *gEnabledApps = nil;
 static NSArray *gUserExcluded = nil;
+static CFNotificationCenterRef gAdSkipDarwinCenter = NULL;
 
 static NSDictionary *loadAdSkipPreferences(void)
 {
@@ -113,6 +114,12 @@ static BOOL adSkipEnabledForCurrentApp(void)
 }
 
 static void stopEngineTimer(void);
+
+static void adSkipPreferencesChanged(CFNotificationCenterRef center,
+                                      void *observer,
+                                      CFStringRef name,
+                                      const void *object,
+                                      CFDictionaryRef userInfo);
 
 static void beginSession(BOOL cold) {
     stopEngineTimer();
@@ -1309,31 +1316,72 @@ static void engineTimerCallback(CFRunLoopTimerRef timer, void *info) {
 }
 %end
 
-// ============ 入口：%ctor 零动作，只挂 3 个会话通知 ============
+// ============ 入口：始终安装会话监听，支持设置即时生效 ============
 %ctor {
-    loadUserConfig();
-    if (!adSkipEnabledForCurrentApp()) return;
-    // 会话在 %ctor 即开启（只赋时间戳+布尔，无 timer/无 OCR/无扫描——安全）。
-    beginSession(YES);
     @autoreleasepool {
+        loadUserConfig();
+
+        // 不再因为启动时开关为 NO 而直接 return。旧逻辑一旦 return，
+        // Settings 里后来打开某个 App 的开关，已运行的 App 永远不会重新
+        // 建立会话，因此用户会感觉“开关不生效”。
+        gAdSkipDarwinCenter = CFNotificationCenterGetDarwinNotifyCenter();
+        CFNotificationCenterAddObserver(gAdSkipDarwinCenter,
+                                        NULL,
+                                        adSkipPreferencesChanged,
+                                        CFSTR("com.mg.adskip.preferences.changed"),
+                                        NULL,
+                                        CFNotificationSuspensionBehaviorDeliverImmediately);
+
         NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
-        // didFinishLaunching 兜底：若注入到启动完成间隔超窗口期，重开会话
+
         [nc addObserverForName:UIApplicationDidFinishLaunchingNotification
                         object:nil queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *note) {
-            beginSession(YES);
+            loadUserConfig();
+            if (adSkipEnabledForCurrentApp()) {
+                beginSession(YES);
+            } else {
+                endSession();
+            }
         }];
-        // 回前台会话：窗口缩短到 8s；引擎逻辑相同（全通道都只点击，无破坏性差异）
+
         [nc addObserverForName:UIApplicationWillEnterForegroundNotification
                         object:nil queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *note) {
-            beginSession(NO);
+            loadUserConfig();
+            if (adSkipEnabledForCurrentApp()) {
+                beginSession(NO);
+            } else {
+                endSession();
+            }
         }];
-        // 切后台/锁屏：会话关闭 → 引擎销毁，一切静默（后台永远零动作）
+
         [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
                         object:nil queue:[NSOperationQueue mainQueue]
                     usingBlock:^(NSNotification *note) {
             endSession();
         }];
+
+        // If the process was injected after launch, honor the setting without
+        // requiring another lifecycle notification.
+        if (adSkipEnabledForCurrentApp()) {
+            beginSession(YES);
+        }
     }
+}
+
+static void adSkipPreferencesChanged(CFNotificationCenterRef center,
+                                      void *observer,
+                                      CFStringRef name,
+                                      const void *object,
+                                      CFDictionaryRef userInfo)
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        loadUserConfig();
+        if (adSkipEnabledForCurrentApp()) {
+            beginSession(NO);
+        } else {
+            endSession();
+        }
+    });
 }
