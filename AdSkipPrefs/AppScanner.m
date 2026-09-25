@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <math.h>
 #import "AppScanner.h"
 
 @implementation ADSkipApp
@@ -163,27 +164,26 @@
             UIImage *image = [UIImage imageWithData:data scale:[UIScreen mainScreen].scale];
             if (image) return image;
 
-            // Older LaunchServices builds can return a small header followed by
-            // raw 32-bit BGRA pixels. Decode only when the header contains sane
-            // dimensions; never assume a fixed 87x87 size.
-            if (data.length > 32) {
-                const uint8_t *bytes = data.bytes;
-                uint32_t width = 0, height = 0;
-                memcpy(&width, bytes + 8, sizeof(width));
-                memcpy(&height, bytes + 12, sizeof(height));
-                if (width > 8 && width <= 1024 && height > 8 && height <= 1024 &&
-                    (NSUInteger)width * (NSUInteger)height * 4 <= data.length - 32) {
+            // iconDataForVariant: is not a PNG on many iOS versions.
+            // It commonly contains a 32-byte header followed by BGRA pixels.
+            // Infer the square dimensions from the payload instead of reading
+            // undocumented header offsets (the previous offsets caused DingTalk
+            // and Dopamine to return nil on newer systems).
+            if (data.length > 32 && ((data.length - 32) % 4) == 0) {
+                NSUInteger pixelCount = (data.length - 32) / 4;
+                NSUInteger side = (NSUInteger)llround(sqrt((double)pixelCount));
+                if (side >= 16 && side <= 1024 && side * side == pixelCount) {
                     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
                     CGContextRef ctx = CGBitmapContextCreate(NULL,
-                                                              width,
-                                                              height,
+                                                              side,
+                                                              side,
                                                               8,
-                                                              width * 4,
+                                                              side * 4,
                                                               colorSpace,
                                                               kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst);
                     if (ctx) {
                         void *dst = CGBitmapContextGetData(ctx);
-                        memcpy(dst, bytes + 32, (size_t)width * (size_t)height * 4);
+                        memcpy(dst, bytes + 32, side * side * 4);
                         CGImageRef cg = CGBitmapContextCreateImage(ctx);
                         CGContextRelease(ctx);
                         CGColorSpaceRelease(colorSpace);
@@ -374,13 +374,15 @@
         displayName = bundleID;
     }
 
-    // LaunchServices is the same system registry iOS uses for the installed
-    // app name. Prefer it over hand-parsing InfoPlist.strings: this fixes apps
-    // whose localization is compiled/packaged in a way that NSBundle cannot
-    // resolve correctly from Settings.
-    NSString *lsName = [self launchServicesLocalizedNameForBundleID:bundleID fallback:nil];
-    if (lsName.length > 0) {
-        displayName = lsName;
+    // Do NOT blindly overwrite the bundle-localized name with LaunchServices.
+    // Some apps (including apps with a Chinese InfoPlist.strings) expose an
+    // English LS name even when the current UI language has a localized
+    // display name. LaunchServices is therefore only a fallback.
+    if (displayName.length == 0 || [displayName isEqualToString:bundleID]) {
+        NSString *lsName = [self launchServicesLocalizedNameForBundleID:bundleID fallback:nil];
+        if (lsName.length > 0) {
+            displayName = lsName;
+        }
     }
 
     ADSkipApp *app = [ADSkipApp new];
