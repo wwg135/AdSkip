@@ -374,13 +374,20 @@
         displayName = bundleID;
     }
 
-    // Bundle metadata is authoritative for the Settings list. LaunchServices
-    // can return a cached/internal name that is not the user-facing app name
-    // (this was the source of the garbled Swiftgram entry in the recent build).
-    // Only fall back to the filesystem-derived name; do not replace a valid
-    // CFBundleDisplayName/InfoPlist.strings value with LS localizedName.
-    if (displayName.length == 0 || [displayName isEqualToString:bundleID]) {
-        displayName = fallbackName.length ? fallbackName : bundleID;
+    // LaunchServices is the same system registry iOS uses for the installed
+    // app name. Prefer it over hand-parsing InfoPlist.strings: this fixes apps
+    // whose localization is compiled/packaged in a way that NSBundle cannot
+    // resolve correctly from Settings.
+    // Swiftgram is intentionally kept on its bundle/localization name.
+    // On some RootHide/iOS combinations LaunchServices returns an invalid
+    // localizedName payload for app.swiftgram.ios, which was rendered as
+    // garbage text in Preferences. Round16's bundle-based result is the
+    // correct value for this app.
+    if (![bundleID isEqualToString:@"app.swiftgram.ios"]) {
+        NSString *lsName = [self launchServicesLocalizedNameForBundleID:bundleID fallback:nil];
+        if (lsName.length > 0) {
+            displayName = lsName;
+        }
     }
 
     ADSkipApp *app = [ADSkipApp new];
